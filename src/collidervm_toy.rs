@@ -554,7 +554,7 @@ mod tests {
         assert!(result.success, "Blake3 script execution failed");
 
         // Create an invalid hash by copying the expected hash and modifying one byte
-        let mut invalid_hash = expected_hash.clone();
+        let mut invalid_hash = expected_hash;
         invalid_hash[0] ^= 0x01; // Change one byte to create an invalid hash
 
         // Test push message script generation (requires message argument)
@@ -731,10 +731,10 @@ mod tests {
     fn test_encoding() {
         let witness_f1 = {
             let mut b = Builder::new();
-            b = b.push_int(0x00 as i64);
-            b = b.push_int(0x0d as i64);
-            b = b.push_int(0x00 as i64);
-            b = b.push_int(0x00 as i64);
+            b = b.push_int(0x00_i64);
+            b = b.push_int(0x0d_i64);
+            b = b.push_int(0x00_i64);
+            b = b.push_int(0x00_i64);
             b.into_script()
         };
         println!("witness_f1: {}", witness_f1);

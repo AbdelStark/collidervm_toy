@@ -104,8 +104,7 @@ pub fn calculate_flow_id(
         Ok((prefix_b, hash.as_bytes()[0..32].try_into().unwrap()))
     } else {
         Err(format!(
-            "Hash prefix {} (from H={}) >= {} (out of range)",
-            prefix_b, hash, max_flow_id
+            "Hash prefix {prefix_b} (from H={hash}) >= {max_flow_id} (out of range)",
         ))
     }
 }
@@ -175,16 +174,11 @@ pub fn find_valid_nonce(
                 // Found a nonce `r` such that H(x, r)|_B = d ∈ D
                 if let Some(pb) = &progress_bar {
                     pb.finish_with_message(format!(
-                        "Found flow_id {} after {} hashes!",
-                        flow_id,
-                        nonce + 1
+                        "Found flow_id {flow_id} after {nonce} hashes!",
                     ));
                 } else {
                     println!(
-                        "  Found valid nonce {} -> flow_id {} after {} hashes.",
-                        nonce,
-                        flow_id,
-                        nonce + 1 // nonce starts at 0
+                        "  Found valid nonce {nonce} -> flow_id {flow_id} after {nonce} hashes.",
                     );
                 }
 
@@ -196,7 +190,7 @@ pub fn find_valid_nonce(
                     nonce as f64 // avoid division by zero
                 };
 
-                println!("  Average hash rate: {:.2} hashes/sec", hash_rate);
+                println!("  Average hash rate: {hash_rate:.2} hashes/sec");
 
                 return Ok((nonce, flow_id, hash));
             }
@@ -231,7 +225,7 @@ pub fn find_valid_nonce(
                         };
 
                         let eta_str = if eta_secs < 60.0 {
-                            format!("{:.1}s", eta_secs)
+                            format!("{eta_secs:.1}s")
                         } else if eta_secs < 3600.0 {
                             format!("{:.1}m {:.0}s", eta_secs / 60.0, eta_secs % 60.0)
                         } else {
@@ -243,13 +237,12 @@ pub fn find_valid_nonce(
                         };
 
                         pb.set_message(format!(
-                            "ETA: {} @ {:.2} KH/s, {:.1}% done",
-                            eta_str,
+                            "ETA: {eta_str} @ {:.2} KH/s, {:.1}% done",
                             avg_hash_rate / 1000.0,
                             (nonce as f64 / expected_attempts as f64) * 100.0
                         ));
                     } else {
-                        println!("  Tried {} hashes... ({:.2} hash/s)", nonce, avg_hash_rate);
+                        println!("  Tried {nonce} hashes... ({avg_hash_rate:.2} hash/s)");
                     }
 
                     last_update = nonce;
@@ -283,8 +276,7 @@ pub fn find_valid_nonce(
                         pb.finish_with_message("Exceeded maximum attempts");
                     }
                     return Err(format!(
-                        "Could not find a valid nonce after {} attempts (expected ~{})",
-                        nonce, expected_attempts
+                        "Could not find a valid nonce after {nonce} attempts (expected ~{expected_attempts})",
                     ));
                 }
             }
@@ -506,7 +498,7 @@ pub fn build_script_f2_blake3_locked(
 
 /// A basic "hash rate" calibration
 pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
-    println!("Calibrating for {} seconds...", duration_secs);
+    println!("Calibrating for {duration_secs} seconds...");
     let pb = ProgressBar::new(100);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -533,7 +525,7 @@ pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
 
     let dt = start.elapsed().as_secs_f64();
     let rate = if dt > 0.0 { count as f64 / dt } else { 0.0 };
-    pb.finish_with_message(format!("~{:.2} H/s", rate));
+    pb.finish_with_message(format!("~{rate:.2} H/s"));
     rate as u64
 }
 
@@ -714,8 +706,8 @@ mod tests {
             nonce.to_le_bytes()[4..8].try_into().unwrap(),
         ]
         .concat();
-        println!("input_value: {}", input_value);
-        println!("nonce: {}", nonce);
+        println!("input_value: {input_value}");
+        println!("nonce: {nonce}");
         println!("message: {}", hex::encode(message.clone()));
         let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, limb_len).compile();
         //println!("msg_push_script_f1: {}", msg_push_script_f1);
@@ -760,7 +752,7 @@ mod tests {
 
         let result = execute_script_buf(script);
 
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
         assert!(result.success, "Blake3 script execution failed");
 
         // Create an invalid hash by copying the expected hash and modifying one byte
@@ -790,7 +782,7 @@ mod tests {
 
         let result = execute_script_buf(script);
 
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
         assert!(!result.success, "Blake3 script execution failed");
     }
 
@@ -859,7 +851,7 @@ mod tests {
         // 6) compare prefix => OP_EQUALVERIFY
         let prefix_script = build_prefix_equalverify(&flow_id_prefix);
 
-        println!("prefix_script: {}", prefix_script);
+        println!("prefix_script: {prefix_script}");
 
         // 7) push OP_TRUE
         let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
@@ -932,7 +924,7 @@ mod tests {
             b = b.push_int(0x00_i64);
             b.into_script()
         };
-        println!("x_sig_script: {}", x_sig_script);
+        println!("x_sig_script: {x_sig_script}");
 
         // flow id prefix: 000d0000
         let flow_id_prefix = vec![0x00, 0x0d, 0x00, 0x00];
@@ -943,7 +935,7 @@ mod tests {
         let mut full_f1 = x_sig_script.to_bytes();
         full_f1.extend(locking_script.to_bytes());
         let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-        println!("exec_f1_script: {}", exec_f1_script);
+        println!("exec_f1_script: {exec_f1_script}");
 
         let f1_res = execute_script_buf(exec_f1_script);
         println!("F1 => success={}", f1_res.success);
@@ -1049,7 +1041,7 @@ mod tests {
         // 6) compare prefix => OP_EQUALVERIFY
         let prefix_script = build_prefix_equalverify(&flow_id_prefix);
 
-        println!("prefix_script: {}", prefix_script);
+        println!("prefix_script: {prefix_script}");
 
         // 7) push OP_TRUE
         let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
@@ -1235,8 +1227,11 @@ mod debug_reconstruct {
         };
 
         let info = execute_script_buf(full_script);
-        println!("\n===== dbg_reconstruct_x_and_verify =====");
-        println!("{:#?}", info);
+        println!(
+            "
+===== dbg_reconstruct_x_and_verify ====="
+        );
+        println!("{info:#?}");
 
         assert!(
             info.success,

@@ -283,7 +283,7 @@ pub fn online_execution(
     );
     let flow = flows_map
         .get(&flow_id)
-        .ok_or_else(|| format!("No presigned flow for flow_id={}", flow_id))?;
+        .ok_or_else(|| format!("No presigned flow for flow_id={flow_id}"))?;
     println!(
         "  {} Retrieved presigned flow d={}",
         "Success:".green(),
@@ -433,8 +433,7 @@ pub fn online_execution(
 
     let msg = if overall {
         format!(
-            "Success: Both F1(x>{}) and F2(x<{}) checks + BLAKE3 prefix match (flow_id={})",
-            F1_THRESHOLD, F2_THRESHOLD, flow_id
+            "Success: Both F1(x>{F1_THRESHOLD}) and F2(x<{F2_THRESHOLD}) checks + BLAKE3 prefix match (flow_id={flow_id})"
         )
     } else {
         format!(

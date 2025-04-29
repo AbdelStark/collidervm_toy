@@ -190,7 +190,7 @@ fn main() {
     println!("  L = {}, => up to 2^L flows", config.l);
     println!("  B = {}, => prefix bits used on chain", config.b);
     println!("  k = {}", config.k);
-    println!("  measured hash_rate = {} H/s", hash_rate);
+    println!("  measured hash_rate = {hash_rate} H/s");
 
     println!(
         "\n{}",

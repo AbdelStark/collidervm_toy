@@ -204,7 +204,7 @@ fn main() -> anyhow::Result<()> {
                 fs::write(file_path, &json_output)?;
             } else {
                 // Otherwise print to stdout
-                println!("{}", json_output);
+                println!("{json_output}");
             }
         } else {
             print_funding_instructions(&signer_addr);
@@ -242,8 +242,7 @@ fn main() -> anyhow::Result<()> {
 
     if !args.json {
         println!(
-            "Found nonce r = {} selecting flow d = {} (B={} bits, L={})",
-            nonce, flow_id, B_PARAM, L_PARAM
+            "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
         );
     }
 
@@ -308,12 +307,12 @@ fn main() -> anyhow::Result<()> {
 
     // Serialize & save
     let tx_f1_hex = serialize_hex(&tx_f1);
-    let f1_file_path = format!("{}/f1.tx", OUTPUT_DIR);
+    let f1_file_path = format!("{OUTPUT_DIR}/f1.tx");
     fs::write(&f1_file_path, &tx_f1_hex)?;
     let tx_f1_id = tx_f1.compute_txid();
 
     if !args.json {
-        println!("tx_f1 created  →  {}  (saved to f1.tx)", tx_f1_id);
+        println!("tx_f1 created  →  {tx_f1_id}  (saved to f1.tx)");
     }
 
     // --------------------------------------------------------------------
@@ -362,17 +361,15 @@ fn main() -> anyhow::Result<()> {
         Witness::from_slice(&[sig_f2_ser, flow_id_enc, x_enc, f1_lock.to_bytes()]);
 
     let tx_f2_hex = serialize_hex(&tx_f2);
-    let f2_file_path = format!("{}/f2.tx", OUTPUT_DIR);
+    let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
     fs::write(&f2_file_path, &tx_f2_hex)?;
     let tx_f2_id = tx_f2.compute_txid();
 
     if !args.json {
-        println!("tx_f2 created  →  {}  (saved to f2.tx)", tx_f2_id);
+        println!("tx_f2 created  →  {tx_f2_id}  (saved to f2.tx)");
         println!(
-            "\n{}\n  1️⃣  broadcast f1.tx ({}).  Wait ≥1 confirmation.\n  2️⃣  broadcast f2.tx ({}).\n{}",
+            "\n{}\n  1️⃣  broadcast f1.tx ({tx_f1_id}).  Wait ≥1 confirmation.\n  2️⃣  broadcast f2.tx ({tx_f2_id}).\n{}",
             "Next steps:".bold().green(),
-            tx_f1_id,
-            tx_f2_id,
             "---------------------------------------------".dimmed()
         );
     }
@@ -405,7 +402,7 @@ fn main() -> anyhow::Result<()> {
             fs::write(file_path, &json_output)?;
         } else {
             // Otherwise print to stdout
-            println!("{}", json_output);
+            println!("{json_output}");
         }
     }
 

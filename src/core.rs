@@ -548,6 +548,7 @@ mod tests {
     };
     use secp256k1::Secp256k1;
 
+    #[allow(dead_code)]
     pub struct ColliderVmTestCase {
         pub b: usize,
         pub l: usize,
@@ -697,8 +698,7 @@ mod tests {
         full_f1.extend(test_case.msg_push_script_f1.to_bytes());
         full_f1.extend(test_case.sig_script_f1.to_bytes());
         full_f1.extend(debug_script.to_bytes());
-        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-        exec_f1_script
+        ScriptBuf::from_bytes(full_f1)
     }
 
     #[test]
@@ -1149,9 +1149,7 @@ mod debug_reconstruct {
     }
 
     fn witness_script() -> ScriptBuf {
-        blake3_push_message_script_with_limb(&message(), LIMB)
-            .compile()
-            .into()
+        blake3_push_message_script_with_limb(&message(), LIMB).compile()
     }
 
     // ------------------------------------------------------------ //

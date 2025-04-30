@@ -633,8 +633,11 @@ mod tests {
     #[test]
     fn test_f1_e2e_with_valid_input() {
         let test_case = create_test_case(16, 4, 123);
-        let script = build_f1_e2e_script(&test_case);
-        let f1_res = execute_script_buf(script);
+        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
+        full_f1.extend(test_case.sig_script_f1.to_bytes());
+        full_f1.extend(test_case.script_f1.to_bytes());
+        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
+        let f1_res = execute_script_buf(exec_f1_script);
         println!("F1 => success={}", f1_res.success);
         println!("F1 => exec_stats={:?}", f1_res.stats);
         println!("F1 => final_stack={:?}", f1_res.final_stack);
@@ -646,78 +649,17 @@ mod tests {
     #[test]
     fn test_f1_e2e_with_invalid_input() {
         let test_case = create_test_case(16, 4, 100);
-        let script = build_f1_e2e_script(&test_case);
-        let f1_res = execute_script_buf(script);
+        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
+        full_f1.extend(test_case.sig_script_f1.to_bytes());
+        full_f1.extend(test_case.script_f1.to_bytes());
+        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
+        let f1_res = execute_script_buf(exec_f1_script);
         println!("F1 => success={}", f1_res.success);
         println!("F1 => exec_stats={:?}", f1_res.stats);
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
         assert!(!f1_res.success);
-    }
-
-    fn build_f1_e2e_script(test_case: &ColliderVmTestCase) -> ScriptBuf {
-        // ******************************************************
-        // CONSTRUCT A DEBUGGING SCRIPT
-        // ******************************************************
-
-        let total_msg_len = 12;
-        let limb_len = 4;
-
-        // 0)  signature
-        let signature_check = Builder::new()
-            .push_key(&test_case.signer_pubkey)
-            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
-            .into_script();
-
-        // 1)  reconstruct x  (keeps message)
-        let reconstruct_x = build_script_reconstruct_x();
-
-        // 2)  x > 100 (non-destructive)
-        let x_test = Builder::new()
-            .push_int(F1_THRESHOLD as i64)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .into_script();
-
-        // 3)  BLAKE-3(message)
-        let compute_blake3 = {
-            let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
-            let optim = optimizer::optimize(compiled);
-            ScriptBuf::from_bytes(optim.to_bytes())
-        };
-
-        // 4)  drop the 64-needed-nibbles minus prefix_len
-        let drop_excess = {
-            let mut b = Builder::new();
-            for _ in 0..(64 - test_case.flow_id_prefix.len()) {
-                b = b.push_opcode(opcodes::all::OP_DROP);
-            }
-            b.into_script()
-        };
-
-        // 5)  compare prefix & succeed
-        let prefix_cmp = build_prefix_equalverify(&test_case.flow_id_prefix);
-        let success = Builder::new().push_opcode(OP_TRUE).into_script();
-
-        let debug_script = combine_scripts(&[
-            signature_check,
-            reconstruct_x,
-            x_test,
-            compute_blake3,
-            drop_excess,
-            prefix_cmp,
-            success,
-        ]);
-
-        // ******************************************************
-        // EXECUTE THE DEBUGGING SCRIPT
-        // ******************************************************
-        let mut full_f1 = Vec::new();
-        full_f1.extend(test_case.msg_push_script_f1.to_bytes());
-        full_f1.extend(test_case.sig_script_f1.to_bytes());
-        full_f1.extend(debug_script.to_bytes());
-        ScriptBuf::from_bytes(full_f1)
     }
 
     #[test]
@@ -746,6 +688,7 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
+        assert!(f1_res.error.is_none());
     }
 
     #[test]
@@ -846,134 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prefix_flow() {
-        let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
-        let (sk, pk) = secp.generate_keypair(&mut rand::thread_rng());
-        let signer_keypair = Keypair::from_secret_key(&secp, &sk);
-
-        let signer_pubkey = PublicKey::new(pk);
-
-        // ColliderVM parameters
-        let b = 16;
-        let l = 4;
-        let input_value = 123u32;
-        let (nonce, flow_id, _hash) = find_valid_nonce(input_value, b, l).unwrap();
-
-        let flow_id_prefix: Vec<u8> = flow_id_to_prefix_bytes(flow_id, b);
-
-        // Create a dummy transaction signature
-        let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
-        let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
-
-        let prefix_len = flow_id_prefix.len();
-        let total_msg_len = 12; // x_4b + r_4b0 + r_4b1
-        let limb_len = 4;
-
-        // 1) Script to check signature
-        let sig_check = {
-            let mut b = Builder::new();
-            b = b.push_key(&signer_pubkey);
-            b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
-        };
-
-        // 2) Bring x_num to top, check x_num > 100
-        let x_greater_check = Builder::new()
-            .push_opcode(opcodes::all::OP_DUP)
-            .push_int(F1_THRESHOLD as i64)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .into_script();
-
-        // 3) Drop x_num and reorder for BLAKE3
-        let reorder_for_blake = Builder::new()
-            .push_opcode(opcodes::all::OP_DROP)
-            .into_script();
-
-        // 4) BLAKE3 compute snippet - OPTIMIZED
-        let compute_compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
-        let compute_optimized = optimizer::optimize(compute_compiled);
-        let compute_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
-
-        // 5) drop limbs we don't need for prefix check
-        // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
-        let needed_nibbles = prefix_len;
-        let blake3_script_hash_len_nibbles = 64;
-        let to_drop = blake3_script_hash_len_nibbles - needed_nibbles;
-        let drop_script = {
-            let mut b = Builder::new();
-            for _ in 0..to_drop {
-                b = b.push_opcode(opcodes::all::OP_DROP);
-            }
-            b.into_script()
-        };
-
-        // 6) compare prefix => OP_EQUALVERIFY
-        let prefix_script = build_prefix_equalverify(&flow_id_prefix);
-
-        println!("prefix_script: {prefix_script}");
-
-        // 7) push OP_TRUE
-        let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
-
-        // Combine the locking script parts
-        let f1_locking_script = combine_scripts(&[
-            sig_check,
-            x_greater_check,
-            reorder_for_blake,
-            compute_script,
-            drop_script,
-            prefix_script,
-            success_script,
-        ]);
-
-        // Construct the witness
-
-        // 2) Let's run the scripts with the actual witness.
-        // Our script expects: [ signature, x_num, r_4b1, r_4b0, x_4b ]
-        //   x_4b is the raw 4-bytes of input_value
-        //   r_4b0, r_4b1 => the 8 bytes of the nonce in 4-byte lumps
-        let x_le_4 = input_value.to_le_bytes();
-        let r_le_8 = nonce.to_le_bytes();
-        let r_4b0 = &r_le_8[0..4];
-        let r_4b1 = &r_le_8[4..8];
-
-        // Print debugging info about the data
-        println!("r_4b0 = {}", hex::encode(r_4b0));
-        println!("r_4b1 = {}", hex::encode(r_4b1));
-        println!("x_le_4 = {}", hex::encode(x_le_4));
-
-        // Create PushBytesBuf for all raw bytes for F1
-        let sig_f1_buf =
-            PushBytesBuf::try_from(sig_f1.as_ref().to_vec()).expect("sig_f1 conversion failed");
-        let _r_4b1_buf_f1 =
-            PushBytesBuf::try_from(r_4b1.to_vec()).expect("r_4b1 conversion failed");
-        let _r_4b0_buf_f1 =
-            PushBytesBuf::try_from(r_4b0.to_vec()).expect("r_4b0 conversion failed");
-        let _x_le_4_buf_f1 =
-            PushBytesBuf::try_from(x_le_4.to_vec()).expect("x_le_4 conversion failed");
-
-        // -- Step F1 script
-        let x_sig_script = {
-            let mut b = Builder::new();
-            b = b.push_int(input_value as i64);
-            b = b.push_slice(sig_f1_buf);
-            b.into_script()
-        };
-
-        let mut full_f1 = x_sig_script.to_bytes();
-        full_f1.extend(f1_locking_script.to_bytes());
-        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-
-        let f1_res = execute_script_buf(exec_f1_script);
-        println!("F1 => success={}", f1_res.success);
-        println!("F1 => exec_stats={:?}", f1_res.stats);
-        println!("F1 => final_stack={:?}", f1_res.final_stack);
-        println!("F1 => error={:?}", f1_res.error);
-        println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        //assert!(f1_res.success);
-    }
-
-    #[test]
     fn test_encoding() {
         let x_sig_script = {
             let mut b = Builder::new();
@@ -1019,7 +834,14 @@ mod tests {
         let compute_optimized = optimizer::optimize(compute_compiled);
         let compute_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
 
-        let locking_script = combine_scripts(&[compute_script]);
+        let expected_hash = *blake3::hash(message.as_ref()).as_bytes();
+        let verify_script = ScriptBuf::from_bytes(
+            blake3_verify_output_script(expected_hash)
+                .compile()
+                .to_bytes(),
+        );
+
+        let locking_script = combine_scripts(&[compute_script, verify_script]);
 
         let witness = push_script;
 
@@ -1032,142 +854,7 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        //assert!(f1_res.success);
-    }
-
-    #[test]
-    fn test_prefix_flow_input_from_witness() {
-        let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
-        let (sk, pk) = secp.generate_keypair(&mut rand::thread_rng());
-        let signer_keypair = Keypair::from_secret_key(&secp, &sk);
-
-        let signer_pubkey = PublicKey::new(pk);
-
-        // ColliderVM parameters
-        let b = 16;
-        let l = 4;
-        let input_value = 123u32;
-        let (nonce, flow_id, _hash) = find_valid_nonce(input_value, b, l).unwrap();
-
-        let flow_id_prefix: Vec<u8> = flow_id_to_prefix_bytes(flow_id, b);
-
-        // Create a dummy transaction signature
-        let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
-        let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
-
-        let prefix_len = flow_id_prefix.len();
-        let total_msg_len = 12; // x_4b + r_4b0 + r_4b1
-        let limb_len = 4;
-
-        // 1) Script to check signature
-        let sig_check = {
-            let mut b = Builder::new();
-            b = b.push_key(&signer_pubkey);
-            b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
-        };
-
-        // 2) Bring x_num to top, check x_num > 100
-        let x_greater_check = Builder::new()
-            .push_opcode(opcodes::all::OP_DUP)
-            .push_int(F1_THRESHOLD as i64)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .into_script();
-
-        // 3) Drop x_num and reorder for BLAKE3
-        let reorder_for_blake = Builder::new()
-            .push_opcode(opcodes::all::OP_DROP)
-            .into_script();
-
-        // 4) BLAKE3 compute snippet - OPTIMIZED
-        let compute_compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
-        let compute_optimized = optimizer::optimize(compute_compiled);
-        let compute_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
-
-        // 5) drop limbs we don't need for prefix check
-        // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
-        let needed_nibbles = prefix_len;
-        let blake3_script_hash_len_nibbles = 64;
-        let to_drop = blake3_script_hash_len_nibbles - needed_nibbles;
-        let drop_script = {
-            let mut b = Builder::new();
-            for _ in 0..to_drop {
-                b = b.push_opcode(opcodes::all::OP_DROP);
-            }
-            b.into_script()
-        };
-
-        // 6) compare prefix => OP_EQUALVERIFY
-        let prefix_script = build_prefix_equalverify(&flow_id_prefix);
-
-        println!("prefix_script: {prefix_script}");
-
-        // 7) push OP_TRUE
-        let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
-
-        // Combine the locking script parts
-        let f1_locking_script = combine_scripts(&[
-            sig_check,
-            x_greater_check,
-            reorder_for_blake,
-            compute_script,
-            drop_script,
-            prefix_script,
-            success_script,
-        ]);
-
-        // Construct the witness
-
-        // 2) Let's run the scripts with the actual witness.
-        // Our script expects: [ signature, x_num, r_4b1, r_4b0, x_4b ]
-        //   x_4b is the raw 4-bytes of input_value
-        //   r_4b0, r_4b1 => the 8 bytes of the nonce in 4-byte lumps
-        let x_le_4 = input_value.to_le_bytes();
-        let r_le_8 = nonce.to_le_bytes();
-        let r_4b0 = &r_le_8[0..4];
-        let r_4b1 = &r_le_8[4..8];
-
-        // Print debugging info about the data
-        println!("r_4b0 = {}", hex::encode(r_4b0));
-        println!("r_4b1 = {}", hex::encode(r_4b1));
-        println!("x_le_4 = {}", hex::encode(x_le_4));
-
-        // Create PushBytesBuf for all raw bytes for F1
-        let sig_f1_buf =
-            PushBytesBuf::try_from(sig_f1.as_ref().to_vec()).expect("sig_f1 conversion failed");
-        let _r_4b1_buf_f1 =
-            PushBytesBuf::try_from(r_4b1.to_vec()).expect("r_4b1 conversion failed");
-        let _r_4b0_buf_f1 =
-            PushBytesBuf::try_from(r_4b0.to_vec()).expect("r_4b0 conversion failed");
-        let _x_le_4_buf_f1 =
-            PushBytesBuf::try_from(x_le_4.to_vec()).expect("x_le_4 conversion failed");
-
-        let message = [
-            0x7b, 0x00, 0x00, 0x00, 0xd9, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-        let msg_push_script = blake3_push_message_script_with_limb(&message, 4).compile();
-        let push_script = ScriptBuf::from_bytes(msg_push_script.to_bytes());
-
-        // -- Step F1 script
-        let x_sig_script = {
-            let mut b = Builder::new();
-            b = b.push_int(input_value as i64);
-            b = b.push_slice(sig_f1_buf);
-            b.into_script()
-        };
-
-        let mut full_f1 = push_script.to_bytes();
-        full_f1.extend(x_sig_script.to_bytes());
-        full_f1.extend(f1_locking_script.to_bytes());
-        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-
-        let f1_res = execute_script_buf(exec_f1_script);
-        println!("F1 => success={}", f1_res.success);
-        println!("F1 => exec_stats={:?}", f1_res.stats);
-        println!("F1 => final_stack={:?}", f1_res.final_stack);
-        println!("F1 => error={:?}", f1_res.error);
-        println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        //assert!(f1_res.success);
+        assert!(f1_res.success);
     }
 
     pub fn create_dummy_sighash_message(seed_bytes: &[u8]) -> Message {
@@ -1175,127 +862,5 @@ mod tests {
         engine.input(seed_bytes);
         let digest = sha256::Hash::from_engine(engine);
         Message::from_digest(digest.to_byte_array())
-    }
-}
-#[cfg(test)]
-mod debug_reconstruct {
-    use bitcoin::blockdata::script::{Builder, ScriptBuf};
-    use bitcoin::opcodes;
-    use bitvm::{execute_script_buf, hash::blake3::blake3_push_message_script_with_limb};
-
-    //------------------------------------------------------------//
-    // Constants & helpers
-    //------------------------------------------------------------//
-    const X_BE: u32 = 0x12_34_56_78;
-    const NONCE: u64 = 0x56_78_9a_bc_de_f0_21_43;
-    const LIMB: u8 = 4;
-
-    fn message() -> Vec<u8> {
-        [
-            X_BE.to_le_bytes(),
-            NONCE.to_le_bytes()[0..4].try_into().unwrap(),
-            NONCE.to_le_bytes()[4..8].try_into().unwrap(),
-        ]
-        .concat()
-    }
-
-    fn witness_script() -> ScriptBuf {
-        blake3_push_message_script_with_limb(&message(), LIMB).compile()
-    }
-
-    // ------------------------------------------------------------ //
-    //  The test
-    // ------------------------------------------------------------ //
-    #[test]
-    fn dbg_reconstruct_x_and_verify() {
-        // 1) witness pushes every nibble of the 12‑byte message
-        let witness = witness_script();
-
-        // 2) locking script
-        let mut b: Builder = Builder::new();
-
-        // -- initialise accumulator
-        b = b.push_int(0).push_opcode(opcodes::all::OP_TOALTSTACK);
-
-        // -- eight rounds: build x from bottom up
-        for _ in 0..8 {
-            b = b
-                .push_opcode(opcodes::all::OP_DEPTH)
-                .push_opcode(opcodes::all::OP_1SUB)
-                .push_opcode(opcodes::all::OP_ROLL) // nib
-                .push_opcode(opcodes::all::OP_FROMALTSTACK); // nib acc
-
-            // acc *= 16
-            for _ in 0..4 {
-                b = b
-                    .push_opcode(opcodes::all::OP_DUP)
-                    .push_opcode(opcodes::all::OP_ADD);
-            }
-            // acc += nib
-            b = b
-                .push_opcode(opcodes::all::OP_ADD)
-                .push_opcode(opcodes::all::OP_TOALTSTACK);
-        }
-
-        // -- drop the 16 nonce nibbles
-        for _ in 0..16 {
-            b = b
-                .push_opcode(opcodes::all::OP_DEPTH)
-                .push_opcode(opcodes::all::OP_1SUB)
-                .push_opcode(opcodes::all::OP_ROLL)
-                .push_opcode(opcodes::all::OP_DROP);
-        }
-
-        // -- pull x back, run equality & range checks
-        b = b
-            .push_opcode(opcodes::all::OP_FROMALTSTACK) // x
-            .push_opcode(opcodes::all::OP_DUP) // x x
-            .push_int(X_BE as i64)
-            .push_opcode(opcodes::all::OP_EQUALVERIFY) // x
-            .push_int(100)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY); // (stack empty)
-
-        // Cleanup loop:
-        //   - always removes the depth word we just pushed
-        //   - removes one real stack item *only* when DEPTH > 0
-        //   - never leaves falsey `[]` leftovers.
-        // 128 iterations are plenty – > than any stack we create.
-        // TODO: investigate if we can have a more efficient way to do this
-        for _ in 0..128 {
-            // any upper bound ≥ max stack size
-            b = b
-                .push_opcode(opcodes::all::OP_DEPTH)
-                .push_opcode(opcodes::all::OP_0NOTEQUAL) // depth != 0 ?
-                .push_opcode(opcodes::all::OP_IF)
-                .push_opcode(opcodes::all::OP_DROP) // drop depth word
-                .push_opcode(opcodes::all::OP_DROP) // drop one payload item
-                .push_opcode(opcodes::all::OP_ENDIF);
-        }
-
-        // -- push TRUE
-        b = b.push_int(1);
-
-        let locking: ScriptBuf = b.into_script();
-
-        // 3) execute
-        let full_script = {
-            let mut bytes = witness.to_bytes();
-            bytes.extend(locking.to_bytes());
-            ScriptBuf::from_bytes(bytes)
-        };
-
-        let info = execute_script_buf(full_script);
-        println!(
-            "
-===== dbg_reconstruct_x_and_verify ====="
-        );
-        println!("{info:#?}");
-
-        assert!(
-            info.success,
-            "Script failed – final stack: {:?}",
-            info.final_stack
-        );
     }
 }

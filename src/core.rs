@@ -442,33 +442,33 @@ pub fn build_script_f2_blake3_locked(
     let total_msg_len = 12;
     let limb_len = 4;
 
-    // 1) signature
-    let sig_check = Builder::new()
-        .push_key(signer_pubkey)
-        .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
-        .into_script();
+    // 1) Script to check signature
+    let verify_signature_script = {
+        let mut b = Builder::new();
+        b = b.push_key(signer_pubkey);
+        b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
+    };
 
-    // 2) Bring x_num to top, check x_num < 200
-    let x_less_check = Builder::new()
-        .push_opcode(opcodes::all::OP_DUP)
+    // 2) Reconstruct x from first 8 nibbles
+    let reconstruct_x_script = build_script_reconstruct_x();
+
+    // 3) Check x_num < 200
+    let x_less_check_script = Builder::new()
+        .push_opcode(opcodes::all::OP_FROMALTSTACK)
         .push_int(F2_THRESHOLD as i64)
         .push_opcode(opcodes::all::OP_LESSTHAN)
         .push_opcode(opcodes::all::OP_VERIFY)
         .into_script();
 
-    // 3) Drop x_num and reorder for BLAKE3
-    let reorder_for_blake = Builder::new()
-        .push_opcode(opcodes::all::OP_DROP)
-        .into_script();
-
     // 4) BLAKE3 compute snippet - OPTIMIZED
-    let compute_script = {
+    let compute_blake3_script = {
         let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
         // Important: Optimize the compute script
         let optimized = optimizer::optimize(compiled);
         ScriptBuf::from_bytes(optimized.to_bytes())
     };
 
+    // 5) drop limbs we don't need for prefix check
     // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
     let needed_nibbles = prefix_len;
     let blake3_script_hash_len_nibbles = 64;
@@ -481,17 +481,18 @@ pub fn build_script_f2_blake3_locked(
         b.into_script()
     };
 
-    let prefix_script = build_prefix_equalverify(flow_id_prefix);
+    // 6) compare prefix => OP_EQUALVERIFY
+    let prefix_cmp_script = build_prefix_equalverify(flow_id_prefix);
 
     let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
 
     combine_scripts(&[
-        sig_check,
-        x_less_check,
-        reorder_for_blake,
-        compute_script,
+        verify_signature_script,
+        reconstruct_x_script,
+        x_less_check_script,
+        compute_blake3_script,
         drop_script,
-        prefix_script,
+        prefix_cmp_script,
         success_script,
     ])
 }

@@ -362,13 +362,11 @@ fn build_script_reconstruct_x() -> ScriptBuf {
             .push_opcode(opcodes::all::OP_ADD) // consume nib copy
             .push_opcode(opcodes::all::OP_TOALTSTACK); // store new acc
     }
-    // leave the finished x on altstack
+    b = b.push_opcode(opcodes::all::OP_FROMALTSTACK);
     b.into_script()
 }
 
 /// Build an F1 script with onchain BLAKE3, checking x>F1_THRESHOLD and the top (b_bits/8) bytes match flow_id_prefix.
-/// For now we cheat and use the provided input and nonce to construct the message for the BLAKE3 hash.
-/// TODO: Reconstruct the message from the witness elements.
 pub fn build_script_f1_blake3_locked(
     signer_pubkey: &PublicKey,
     flow_id_prefix: &[u8],
@@ -390,7 +388,6 @@ pub fn build_script_f1_blake3_locked(
 
     // 3) Check x_num > 100
     let x_greater_check_script = Builder::new()
-        .push_opcode(opcodes::all::OP_FROMALTSTACK)
         .push_int(F1_THRESHOLD as i64)
         .push_opcode(opcodes::all::OP_GREATERTHAN)
         .push_opcode(opcodes::all::OP_VERIFY)
@@ -454,7 +451,6 @@ pub fn build_script_f2_blake3_locked(
 
     // 3) Check x_num < 200
     let x_less_check_script = Builder::new()
-        .push_opcode(opcodes::all::OP_FROMALTSTACK)
         .push_int(F2_THRESHOLD as i64)
         .push_opcode(opcodes::all::OP_LESSTHAN)
         .push_opcode(opcodes::all::OP_VERIFY)
@@ -679,7 +675,6 @@ mod tests {
 
         // 2)  x > 100 (non-destructive)
         let x_test = Builder::new()
-            .push_opcode(opcodes::all::OP_FROMALTSTACK)
             .push_int(F1_THRESHOLD as i64)
             .push_opcode(opcodes::all::OP_GREATERTHAN)
             .push_opcode(opcodes::all::OP_VERIFY)

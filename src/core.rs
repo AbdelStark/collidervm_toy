@@ -688,6 +688,7 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
+        assert!(f1_res.error.is_none());
     }
 
     #[test]
@@ -833,7 +834,14 @@ mod tests {
         let compute_optimized = optimizer::optimize(compute_compiled);
         let compute_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
 
-        let locking_script = combine_scripts(&[compute_script]);
+        let expected_hash = *blake3::hash(message.as_ref()).as_bytes();
+        let verify_script = ScriptBuf::from_bytes(
+            blake3_verify_output_script(expected_hash)
+                .compile()
+                .to_bytes(),
+        );
+
+        let locking_script = combine_scripts(&[compute_script, verify_script]);
 
         let witness = push_script;
 
@@ -846,7 +854,7 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        assert!(f1_res.error.is_none());
+        assert!(f1_res.success);
     }
 
     pub fn create_dummy_sighash_message(seed_bytes: &[u8]) -> Message {

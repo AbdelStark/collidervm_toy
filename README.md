@@ -55,7 +55,7 @@ This simulation implements a minimal proof-of-concept:
 - **Simulated Actors:** Generates `n` Signers and `m` Operators with `secp256k1` key pairs (`SignerInfo`, `OperatorInfo`), but their roles in complex multi-party signing or liveness are simplified.
 - **Simulated Presigning:** Creates placeholder Bitcoin `Transaction` structures (`create_placeholder_tx`) and calculates simplified sighash messages (`create_toy_sighash_message`). It collects real Schnorr signatures but doesn't handle actual UTXO management or realistic fee calculation.
 - **Simplified Bitcoin Script:**
-  - **Hash Check:** The script check `H(x, r)|_B = d` is executed according to the rules of the paper for the prefix check. However, for now, the concatenation of `x` and `r` for the input of the `Blake3` hash is passed separately from the input `x` used for the logic of the functions `F1` and `F2`, which would allow the operator to cheat. We need to improve this part to have the same input `x` used for both the hash and the logic of the functions.
+  - **Hash Check:** The script check `H(x, r)|_B = d` is executed according to the rules of the paper for the prefix check.
   - **Signature Check:** Scripts include `OP_CHECKSIGVERIFY` and the Signer's public key. However, the `bitvm::execute_script_buf` function used for simulation does _not_ perform cryptographic signature verification. It checks script logic but assumes signatures are valid if provided.
 - **Limited Flows:** Generates `min(2^L, 16)` flows instead of the full `2^L` for performance reasons in this demo.
 - **Off-Chain Hashing:** The Operator's nonce search (`find_valid_nonce`) uses Rust's `blake3` library to simulate the `~2^(B-L)` off-chain work.
@@ -70,7 +70,7 @@ The codebase is organized into three main Rust modules:
   - Sets up the `ColliderVmConfig` (n, m, L, B, k).
   - Calls `simulation::run_simulation` to orchestrate the entire process.
   - Prints the final simulation results.
-- **`src/collidervm_toy.rs`**:
+- **`src/core.rs`**:
   - Defines the core data structures (`ColliderVmConfig`, `SignerInfo`, `OperatorInfo`, `PresignedStep`, `PresignedFlow`).
   - Contains constants (e.g., `F1_THRESHOLD`).
   - Implements helper functions primarily used _off-chain_ or for setup:
@@ -82,7 +82,7 @@ The codebase is organized into three main Rust modules:
   - Implements the two main phases of the ColliderVM simulation protocol:
     - `offline_setup`: Simulates the Signers generating keys and creating/signing all the `PresignedFlow`s for all potential flow IDs `d`.
     - `online_execution`: Simulates the Operator finding a nonce for a given input `x`, selecting the corresponding flow `d`, constructing the full witness and script, and executing the F1 and F2 scripts.
-  - Uses helper functions and data structures from `collidervm_toy.rs`.
+  - Uses helper functions and data structures from `core.rs`.
   - Uses `bitvm::execute_script_buf` to simulate the execution of the constructed Bitcoin scripts.
 
 ## Simulation End-to-End Flow

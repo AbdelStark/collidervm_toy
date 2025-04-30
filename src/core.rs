@@ -549,11 +549,15 @@ mod tests {
         pub signer_pubkey: PublicKey,
         pub signer_keypair: Keypair,
         pub flow_id_prefix: Vec<u8>,
-        pub sig_f1: Signature,
-        pub f1_script: ScriptBuf,
         pub message: Vec<u8>,
+        pub sig_f1: Signature,
+        pub script_f1: ScriptBuf,
         pub msg_push_script_f1: ScriptBuf,
         pub sig_script_f1: ScriptBuf,
+        pub sig_f2: Signature,
+        pub script_f2: ScriptBuf,
+        pub msg_push_script_f2: ScriptBuf,
+        pub sig_script_f2: ScriptBuf,
     }
 
     pub fn create_test_case(b: usize, l: usize, input_value: u32) -> ColliderVmTestCase {
@@ -568,7 +572,7 @@ mod tests {
         let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
         let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
 
-        let f1_script = build_script_f1_blake3_locked(&signer_pubkey, &flow_id_prefix, b);
+        let script_f1 = build_script_f1_blake3_locked(&signer_pubkey, &flow_id_prefix, b);
 
         let message = [
             input_value.to_le_bytes(),
@@ -588,6 +592,29 @@ mod tests {
             b.into_script()
         };
 
+        let sighash_f2 = create_dummy_sighash_message(&flow_id_prefix.clone());
+        let sig_f2 = secp.sign_schnorr(&sighash_f2, &signer_keypair);
+
+        let script_f2 = build_script_f2_blake3_locked(&signer_pubkey, &flow_id_prefix, b);
+
+        let message = [
+            input_value.to_le_bytes(),
+            nonce.to_le_bytes()[0..4].try_into().unwrap(),
+            nonce.to_le_bytes()[4..8].try_into().unwrap(),
+        ]
+        .concat();
+        let msg_push_script_f2 = blake3_push_message_script_with_limb(&message, 4).compile();
+
+        // Create PushBytesBuf for all raw bytes for F2
+        let sig_f2_buf =
+            PushBytesBuf::try_from(sig_f2.as_ref().to_vec()).expect("sig_f2 conversion failed");
+
+        let sig_script_f2 = {
+            let mut b = Builder::new();
+            b = b.push_slice(sig_f2_buf);
+            b.into_script()
+        };
+
         ColliderVmTestCase {
             b,
             l,
@@ -595,11 +622,15 @@ mod tests {
             signer_pubkey,
             signer_keypair,
             flow_id_prefix,
-            sig_f1,
-            f1_script,
             message,
+            sig_f1,
+            script_f1,
             msg_push_script_f1,
             sig_script_f1,
+            sig_f2,
+            script_f2,
+            msg_push_script_f2,
+            sig_script_f2,
         }
     }
 
@@ -720,6 +751,38 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
+    }
+
+    #[test]
+    fn test_f2_e2e_with_valid_input() {
+        let test_case = create_test_case(16, 4, 123);
+        let mut full_f2 = test_case.msg_push_script_f2.to_bytes();
+        full_f2.extend(test_case.sig_script_f2.to_bytes());
+        full_f2.extend(test_case.script_f2.to_bytes());
+        let exec_f2_script = ScriptBuf::from_bytes(full_f2);
+        let f2_res = execute_script_buf(exec_f2_script);
+        println!("F2 => success={}", f2_res.success);
+        println!("F2 => exec_stats={:?}", f2_res.stats);
+        println!("F2 => final_stack={:?}", f2_res.final_stack);
+        println!("F2 => error={:?}", f2_res.error);
+        println!("F2 => last_opcode={:?}", f2_res.last_opcode);
+        assert!(f2_res.success);
+    }
+
+    #[test]
+    fn test_f2_e2e_with_invalid_input() {
+        let test_case = create_test_case(16, 4, 200);
+        let mut full_f2 = test_case.msg_push_script_f2.to_bytes();
+        full_f2.extend(test_case.sig_script_f2.to_bytes());
+        full_f2.extend(test_case.script_f2.to_bytes());
+        let exec_f2_script = ScriptBuf::from_bytes(full_f2);
+        let f2_res = execute_script_buf(exec_f2_script);
+        println!("F2 => success={}", f2_res.success);
+        println!("F2 => exec_stats={:?}", f2_res.stats);
+        println!("F2 => final_stack={:?}", f2_res.final_stack);
+        println!("F2 => error={:?}", f2_res.error);
+        println!("F2 => last_opcode={:?}", f2_res.last_opcode);
+        assert!(!f2_res.success);
     }
 
     #[test]

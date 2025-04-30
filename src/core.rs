@@ -633,8 +633,11 @@ mod tests {
     #[test]
     fn test_f1_e2e_with_valid_input() {
         let test_case = create_test_case(16, 4, 123);
-        let script = build_f1_e2e_script(&test_case);
-        let f1_res = execute_script_buf(script);
+        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
+        full_f1.extend(test_case.sig_script_f1.to_bytes());
+        full_f1.extend(test_case.script_f1.to_bytes());
+        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
+        let f1_res = execute_script_buf(exec_f1_script);
         println!("F1 => success={}", f1_res.success);
         println!("F1 => exec_stats={:?}", f1_res.stats);
         println!("F1 => final_stack={:?}", f1_res.final_stack);
@@ -646,78 +649,17 @@ mod tests {
     #[test]
     fn test_f1_e2e_with_invalid_input() {
         let test_case = create_test_case(16, 4, 100);
-        let script = build_f1_e2e_script(&test_case);
-        let f1_res = execute_script_buf(script);
+        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
+        full_f1.extend(test_case.sig_script_f1.to_bytes());
+        full_f1.extend(test_case.script_f1.to_bytes());
+        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
+        let f1_res = execute_script_buf(exec_f1_script);
         println!("F1 => success={}", f1_res.success);
         println!("F1 => exec_stats={:?}", f1_res.stats);
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
         assert!(!f1_res.success);
-    }
-
-    fn build_f1_e2e_script(test_case: &ColliderVmTestCase) -> ScriptBuf {
-        // ******************************************************
-        // CONSTRUCT A DEBUGGING SCRIPT
-        // ******************************************************
-
-        let total_msg_len = 12;
-        let limb_len = 4;
-
-        // 0)  signature
-        let signature_check = Builder::new()
-            .push_key(&test_case.signer_pubkey)
-            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
-            .into_script();
-
-        // 1)  reconstruct x  (keeps message)
-        let reconstruct_x = build_script_reconstruct_x();
-
-        // 2)  x > 100 (non-destructive)
-        let x_test = Builder::new()
-            .push_int(F1_THRESHOLD as i64)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .into_script();
-
-        // 3)  BLAKE-3(message)
-        let compute_blake3 = {
-            let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
-            let optim = optimizer::optimize(compiled);
-            ScriptBuf::from_bytes(optim.to_bytes())
-        };
-
-        // 4)  drop the 64-needed-nibbles minus prefix_len
-        let drop_excess = {
-            let mut b = Builder::new();
-            for _ in 0..(64 - test_case.flow_id_prefix.len()) {
-                b = b.push_opcode(opcodes::all::OP_DROP);
-            }
-            b.into_script()
-        };
-
-        // 5)  compare prefix & succeed
-        let prefix_cmp = build_prefix_equalverify(&test_case.flow_id_prefix);
-        let success = Builder::new().push_opcode(OP_TRUE).into_script();
-
-        let debug_script = combine_scripts(&[
-            signature_check,
-            reconstruct_x,
-            x_test,
-            compute_blake3,
-            drop_excess,
-            prefix_cmp,
-            success,
-        ]);
-
-        // ******************************************************
-        // EXECUTE THE DEBUGGING SCRIPT
-        // ******************************************************
-        let mut full_f1 = Vec::new();
-        full_f1.extend(test_case.msg_push_script_f1.to_bytes());
-        full_f1.extend(test_case.sig_script_f1.to_bytes());
-        full_f1.extend(debug_script.to_bytes());
-        ScriptBuf::from_bytes(full_f1)
     }
 
     #[test]

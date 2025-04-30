@@ -9,7 +9,7 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)" # Assumes scripts/demo relative to workspace root
 readonly DEFAULT_PARAMS_FILE="demo_params.env"
-readonly DEFAULT_INPUT_X=114  # Default value for the input x
+readonly DEFAULT_INPUT_X=123  # Default value for the input x
 readonly DEMO_OUTPUT_DIR="target/demo" # Matches the output dir in src/bin/demo.rs
 readonly JSON_TEMP_DIR="$DEMO_OUTPUT_DIR/json" # Directory for temporary JSON output files
 
@@ -292,37 +292,37 @@ log "F1 transaction ID: $tx_f1_id"
 log "F2 transaction ID: $tx_f2_id"
 wait_for_user
 
-################################################################################
-#                         STEP 4: SEND DEMO TRANSACTIONS                        #
-################################################################################
-
-print_section "STEP 4: SENDING F1 & F2 TRANSACTIONS"
-
-# Prepare arguments for send_demo_transactions.sh
-send_args=()
-if [[ "$dry_run_send" == true ]]; then
-    send_args+=("--dry-run")
-fi
-send_args+=("$DEMO_OUTPUT_DIR") # Pass the directory containing the tx files
-
-# Run the send_demo_transactions.sh script
-log "Running send_demo_transactions.sh script to broadcast transactions..."
-run_script "$SCRIPT_DIR/send_demo_transactions.sh" "${send_args[@]}"
-
-################################################################################
-#                                 SUMMARY                                        #
-################################################################################
-
-print_section "DEMO COMPLETED"
-
-log "ColliderVM Demo orchestration completed."
-log "Parameters saved to: $params_file"
-log "JSON outputs saved to: $JSON_TEMP_DIR/"
-log "Transaction files saved to: $DEMO_OUTPUT_DIR/"
-if [[ "$dry_run_send" == true ]]; then
-    log "Demo was run in DRY RUN mode - no transactions were broadcast."
-else
-    log "Check the output of bitcoin-cli or a block explorer for transaction confirmations."
-fi
-
-exit 0 
+#################################################################################
+##                         STEP 4: SEND DEMO TRANSACTIONS                        #
+#################################################################################
+#
+#print_section "STEP 4: SENDING F1 & F2 TRANSACTIONS"
+#
+## Prepare arguments for send_demo_transactions.sh
+#send_args=()
+#if [[ "$dry_run_send" == true ]]; then
+#    send_args+=("--dry-run")
+#fi
+#send_args+=("$DEMO_OUTPUT_DIR") # Pass the directory containing the tx files
+#
+## Run the send_demo_transactions.sh script
+#log "Running send_demo_transactions.sh script to broadcast transactions..."
+#run_script "$SCRIPT_DIR/send_demo_transactions.sh" "${send_args[@]}"
+#
+#################################################################################
+##                                 SUMMARY                                        #
+#################################################################################
+#
+#print_section "DEMO COMPLETED"
+#
+#log "ColliderVM Demo orchestration completed."
+#log "Parameters saved to: $params_file"
+#log "JSON outputs saved to: $JSON_TEMP_DIR/"
+#log "Transaction files saved to: $DEMO_OUTPUT_DIR/"
+#if [[ "$dry_run_send" == true ]]; then
+#    log "Demo was run in DRY RUN mode - no transactions were broadcast."
+#else
+#    log "Check the output of bitcoin-cli or a block explorer for transaction confirmations."
+#fi
+#
+#exit 0

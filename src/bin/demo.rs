@@ -31,30 +31,30 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use std::{fs, str::FromStr};
-
+use bitcoin::CompressedPublicKey;
 use bitcoin::WScriptHash;
 use bitcoin::{
     Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness,
     absolute,
 };
-use bitcoin::{CompressedPublicKey, consensus::encode::Encodable};
 use bitcoin::{EcdsaSighashType, hashes::Hash};
 use bitcoin::{
     secp256k1::{Message, Secp256k1, SecretKey},
     sighash::SighashCache,
 };
+use bitcoincore_rpc::{Auth, Client, RawTx, RpcApi, json};
 use clap::Parser;
-use colored::*;
-use serde::Serialize;
-
 use collidervm_toy::core::{
     build_script_f1_blake3_locked, build_script_f2_blake3_locked, find_valid_nonce,
     flow_id_to_prefix_bytes,
 };
+use colored::*;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use std::{fs, str::FromStr};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
-const REQUIRED_AMOUNT_SAT: u64 = 10_000;
+const REQUIRED_AMOUNT_SAT: u64 = 20_000;
 /// Hard‑coded ColliderVM parameters (match the toy simulation)
 const L_PARAM: usize = 4;
 const B_PARAM: usize = 16; // multiple of 8 ≤ 32
@@ -90,21 +90,21 @@ struct Args {
 }
 
 /// Structure for serializing key details to JSON
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct KeyInfo {
-    signer: KeyPair,
-    operator: KeyPair,
+    pub signer: KeyPair,
+    pub operator: KeyPair,
 }
 
 /// Structure for serializing individual key pairs to JSON
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct KeyPair {
-    address: String,
-    wif: String,
+    pub address: String,
+    pub wif: String,
 }
 
 /// Structure for serializing transaction details to JSON
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct TransactionInfo {
     f1: TxInfo,
     f2: TxInfo,
@@ -113,23 +113,23 @@ struct TransactionInfo {
 }
 
 /// Structure for serializing individual transaction information
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct TxInfo {
     txid: String,
     file_path: String,
 }
 
 /// Complete demo output for JSON serialization
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct DemoOutput {
-    keys: KeyInfo,
+    pub keys: KeyInfo,
     transactions: Option<TransactionInfo>,
     input_x: u32,
     parameters: DemoParameters,
 }
 
 /// Parameters used in the demo for JSON serialization
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct DemoParameters {
     required_amount_sat: u64,
     l_param: usize,
@@ -141,15 +141,29 @@ fn main() -> anyhow::Result<()> {
 
     // 0. Generate Signer & Operator keys (for demo we use 1‑of‑1)
     let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
-    let (sk_signer, pk_signer) = secp.generate_keypair(&mut rand::thread_rng());
-    let signer_compressed_pk =
-        CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer)).unwrap();
-    let signer_addr = Address::p2wpkh(&signer_compressed_pk, Network::Signet);
+    let (sk_signer, pk_signer, sk_operator, pk_operator) = match args.funding_txid {
+        None => {
+            let (sk_signer, pk_signer) = secp.generate_keypair(&mut rand::thread_rng());
+            let (sk_operator, pk_operator) = secp.generate_keypair(&mut rand::thread_rng());
+            (sk_signer, pk_signer, sk_operator, pk_operator)
+        }
+        Some(_) => {
+            let demo_output_json = std::fs::read("target/demo/json/keys.json")?;
+            let demo_output: DemoOutput = serde_json::from_slice(&demo_output_json)?;
+            let sk_signer = wif_to_sk(&demo_output.keys.signer.wif);
+            let pk_signer = secp256k1::PublicKey::from_secret_key(&secp, &sk_signer);
 
-    let (sk_operator, pk_operator) = secp.generate_keypair(&mut rand::thread_rng());
+            let sk_operator = wif_to_sk(&demo_output.keys.operator.wif);
+            let pk_operator = secp256k1::PublicKey::from_secret_key(&secp, &sk_operator);
+            (sk_signer, pk_signer, sk_operator, pk_operator)
+        }
+    };
+    let signer_compressed_pk = CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
+    let signer_addr = Address::p2wpkh(&signer_compressed_pk, Network::Regtest);
+
     let operator_compressed_pk =
-        CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_operator)).unwrap();
-    let operator_addr = Address::p2wpkh(&operator_compressed_pk, Network::Signet);
+        CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_operator))?;
+    let operator_addr = Address::p2wpkh(&operator_compressed_pk, Network::Regtest);
 
     // Prepare key information for output
     let key_info = KeyInfo {
@@ -162,6 +176,9 @@ fn main() -> anyhow::Result<()> {
             wif: sk_to_wif(&sk_operator),
         },
     };
+
+    let sk_expected = wif_to_sk(&key_info.signer.wif);
+    assert_eq!(sk_expected, sk_signer);
 
     // Prepare demo output structure for JSON output
     let mut demo_output = DemoOutput {
@@ -228,6 +245,24 @@ fn main() -> anyhow::Result<()> {
         vout: args.funding_vout,
     };
 
+    let base_url = "http://127.0.0.1:18443";
+    let rpc_client = Client::new(
+        &format!("{base_url}/wallet/alice"),
+        Auth::UserPass("111111".to_string(), "111111".to_string()),
+    )
+    .expect("Failed to connect to bitcoind");
+
+    // Query UTXOs from `bitcoind`
+    let desc = format!("addr({})", signer_addr.to_string());
+    println!("scan: {}", desc);
+    let utxos = rpc_client
+        .scan_tx_out_set_blocking(&[json::ScanTxOutRequest::Single(desc)])
+        //.list_unspent(None, None, Some(&[&p2wsh_address]), None, None)
+        .unwrap();
+    assert!(utxos.unspents.len() > 0);
+    let utxo = &utxos.unspents[0];
+    println!("utxos: {:?}", utxo);
+
     // In a production‑ready tool we would RPC‑query the node to retrieve the
     // exact amount & pkScript of the funding UTXO.  To keep the demo
     // self‑contained we *assume* the UTXO pays `REQUIRED_AMOUNT_SAT` to the
@@ -249,11 +284,11 @@ fn main() -> anyhow::Result<()> {
     // --------------------------------------------------------------------
     // 3. Build locking scripts for F1 & F2 (for the chosen flow)
     // --------------------------------------------------------------------
-    let prefix_nibbles = flow_id_to_prefix_bytes(flow_id, B_PARAM);
+    let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
     let f1_lock =
-        build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &prefix_nibbles, B_PARAM);
+        build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
     let _f2_lock =
-        build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &prefix_nibbles, B_PARAM);
+        build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
     // P2WSH wrapper for F1 output
     let f1_wsh = WScriptHash::hash(f1_lock.as_bytes());
@@ -278,7 +313,7 @@ fn main() -> anyhow::Result<()> {
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f1_output_value),
-            script_pubkey: f1_spk.clone(),
+            script_pubkey: f1_spk,
         }],
     };
 
@@ -300,13 +335,14 @@ fn main() -> anyhow::Result<()> {
     let sig = secp.sign_ecdsa(&Message::from_digest_slice(&sighash[..])?, &sk_signer);
     let mut sig_ser = sig.serialize_der().to_vec();
     sig_ser.push(EcdsaSighashType::All as u8);
-    tx_f1.input[0].witness = Witness::from_slice(&[sig_ser, pk_signer.serialize().to_vec()]);
+    tx_f1.input[0].witness =
+        Witness::from_slice(&[sig_ser, pk_signer.serialize().to_vec()]);
 
     // Create the output directory if it doesn't exist
     fs::create_dir_all(OUTPUT_DIR)?;
 
     // Serialize & save
-    let tx_f1_hex = serialize_hex(&tx_f1);
+    let tx_f1_hex = tx_f1.raw_hex();
     let f1_file_path = format!("{OUTPUT_DIR}/f1.tx");
     fs::write(&f1_file_path, &tx_f1_hex)?;
     let tx_f1_id = tx_f1.compute_txid();
@@ -318,7 +354,7 @@ fn main() -> anyhow::Result<()> {
     // --------------------------------------------------------------------
     // 5. Construct tx_f2  (spend F1 output → Operator)
     // --------------------------------------------------------------------
-    let fee_f2 = estimate_fee_vbytes(120, args.fee_rate); // 1 input P2WSH + 1 output
+    let fee_f2 = estimate_fee_vbytes(150, args.fee_rate); // 1 input P2WSH + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
@@ -360,7 +396,7 @@ fn main() -> anyhow::Result<()> {
     tx_f2.input[0].witness =
         Witness::from_slice(&[sig_f2_ser, flow_id_enc, x_enc, f1_lock.to_bytes()]);
 
-    let tx_f2_hex = serialize_hex(&tx_f2);
+    let tx_f2_hex = tx_f2.raw_hex();
     let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
     fs::write(&f2_file_path, &tx_f2_hex)?;
     let tx_f2_id = tx_f2.compute_txid();
@@ -389,7 +425,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // If JSON output is requested, print the full JSON structure
-    if args.json {
+    if args.json && args.funding_txid.is_none() {
         let json_output = serde_json::to_string_pretty(&demo_output)?;
 
         // If a JSON output file is specified, write to it
@@ -406,6 +442,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
+    println!("f1 confirming, please wait for the mining blocks");
+    wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
+    println!("f1 confirmed");
+
+    let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
+    println!("f2 confirming, please wait for the mining blocks");
+    wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
+    println!("f2 confirmed");
     Ok(())
 }
 
@@ -451,17 +496,62 @@ fn estimate_fee_vbytes(vbytes: usize, rate: u64) -> u64 {
     (vbytes as u64) * rate
 }
 
-/// Very small helper to serialize a TX to hex
-fn serialize_hex(tx: &bitcoin::Transaction) -> String {
-    let mut v = Vec::new();
-    tx.consensus_encode(&mut v).expect("encode");
-    hex::encode(v)
-}
-
 /// Convert a SecretKey to WIF (signet/testnet)
 fn sk_to_wif(sk: &SecretKey) -> String {
-    use bitcoin::bip32::Xpriv;
-    // Not ideal, but reuse XPriv to get WIF easily
-    let xpriv = Xpriv::new_master(Network::Signet, sk.secret_bytes().as_slice()).expect("xpriv");
-    xpriv.to_priv().to_wif()
+    let priv_key = bitcoin::PrivateKey::new(sk.clone(), Network::Regtest);
+    priv_key.to_wif()
+}
+
+fn wif_to_sk(wif: &str) -> SecretKey {
+    bitcoin::PrivateKey::from_wif(wif)
+        .expect("Invalid WIF")
+        .inner
+}
+
+fn wait_for_confirmation(
+    rpc_client: &Client,
+    txid: &Txid,
+    confirmations: u32,
+    timeout_sec: u64,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        match rpc_client.get_raw_transaction_info(&txid, None) {
+            Ok(tx_info) => {
+                if let Some(c) = tx_info.confirmations {
+                    println!("Confirmations: {}", confirmations);
+                    if c >= confirmations {
+                        println!("✅ Transaction is confirmed!");
+                        break;
+                    }
+                } else {
+                    println!("⏳ Transaction in mempool, no confirmations yet.");
+                }
+            }
+            Err(e) => {
+                println!("Error fetching transaction info: {}", e);
+                anyhow::bail!(e);
+            }
+        }
+        if start.elapsed().as_secs() > timeout_sec {
+            anyhow::bail!("timed out waiting for confirmation");
+        }
+        std::thread::sleep(Duration::from_secs(10)); // wait and poll again
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    pub fn test_encode_scriptnum() {
+        // python:
+        // >>> (1000).to_bytes(2, byteorder="little")
+        // >>> b'\xe8\x03'
+        let n = 1000;
+        let script = encode_scriptnum(n);
+        let expect = vec![0xe8, 0x03];
+        assert_eq!(script, expect);
+    }
 }

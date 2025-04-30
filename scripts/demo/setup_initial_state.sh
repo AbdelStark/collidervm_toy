@@ -1,5 +1,4 @@
 #!/bin/bash
-
 set -euo pipefail
 
 # Load .env file if it exists, for BITCOIN_CLI_CMD_DEMO
@@ -195,6 +194,7 @@ else
   if [[ -z "$funding_txid" ]]; then
     error "Failed to send funding transaction using '$bitcoin_cli'. Check wallet balance and node status."
   fi
+  $bitcoin_cli -generate 10
 fi
 
 log "Funding transaction broadcast successfully. TXID: $funding_txid"

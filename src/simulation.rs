@@ -402,15 +402,14 @@ pub fn online_execution(
     .concat();
     let msg_push_script_f2 = blake3_push_message_script_with_limb(&message, 4).compile();
 
-    let x_sig_script_f2 = {
+    let sig_script_f2 = {
         let mut b = Builder::new();
-        b = b.push_int(input_value as i64);
         b = b.push_slice(sig_f2_buf);
         b.into_script()
     };
 
     let mut full_f2 = msg_push_script_f2.to_bytes();
-    full_f2.extend(x_sig_script_f2.to_bytes());
+    full_f2.extend(sig_script_f2.to_bytes());
     full_f2.extend(step_f2.locking_script.to_bytes());
     let exec_f2_script = ScriptBuf::from_bytes(full_f2);
 

@@ -396,6 +396,12 @@ fn main() -> anyhow::Result<()> {
     tx_f2.input[0].witness =
         Witness::from_slice(&[sig_f2_ser, flow_id_enc, x_enc, f1_lock.to_bytes()]);
 
+    let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
+    let f2_output_value = f1_output_value
+        .checked_sub(fee_f2)
+        .expect("f1 output too small for f2 fee");
+    tx_f2.output[0].value = Amount::from_sat(f2_output_value);
+
     let tx_f2_hex = tx_f2.raw_hex();
     let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
     fs::write(&f2_file_path, &tx_f2_hex)?;
@@ -442,13 +448,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    println!("sending f1...");
     let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
-    println!("f1 confirming, please wait for the mining blocks");
+    println!("f1 confirming, please wait for the mining blocks, {}", f1_txid);
     wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
     println!("f1 confirmed");
 
+    println!("sending f2...");
     let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
-    println!("f2 confirming, please wait for the mining blocks");
+    println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
     wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
     println!("f2 confirmed");
     Ok(())

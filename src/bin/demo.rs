@@ -52,6 +52,7 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{fs, str::FromStr};
+use bitcoin::taproot::TaprootBuilder;
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 20_000;
@@ -294,6 +295,17 @@ fn main() -> anyhow::Result<()> {
     let f1_wsh = WScriptHash::hash(f1_lock.as_bytes());
     let f1_spk = ScriptBuf::new_p2wsh(&f1_wsh);
 
+//    let x_only_pk = bitcoin::key::XOnlyPublicKey::from(&pk_signer);
+//    let taproot_tree = TaprootBuilder::new()
+//        .add_leaf(0, f1_lock)
+//        .expect("valid leaf");
+//    // Final Taproot output key
+//    let taproot_info = taproot_tree.finalize(&secp, x_only_pk).unwrap();
+//    let output_key = taproot_info.output_key();
+//    let f1_tr= Address::p2tr_tweaked(output_key, bitcoin::Network::Regtest);
+//
+//    let f1_spk = ScriptBuf::new_p2tr(&f1_tr, x_only_pk, None);
+
     // --------------------------------------------------------------------
     // 4. Construct tx_f1  (funding → F1 output)
     // --------------------------------------------------------------------
@@ -451,6 +463,9 @@ fn main() -> anyhow::Result<()> {
     println!("sending f1...");
     let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
     println!("f1 confirming, please wait for the mining blocks, {}", f1_txid);
+
+    rpc_client.generate_to_address(1, &signer_addr).unwrap();
+
     wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
     println!("f1 confirmed");
 

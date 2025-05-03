@@ -32,11 +32,3 @@ $BTC --rpcwallet=alice walletpassphrase "btcstaker" 6000
 
 cargo build && ./run_full_demo.sh
 ```
-
-Wait for a moment until it pushes the f1 tx, you need to mine at least one block in another console by ```$BTC --rpcwallet=alice -generate 1```, then it begin to push the f2 tx.
-
-
-If you get `Please enter the wallet passphrase with walletpassphrase first.`, just do:
-```aiignore
-$BTC --rpcwallet=alice walletpassphrase "btcstaker" 6000
-```

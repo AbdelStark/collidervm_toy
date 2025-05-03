@@ -31,8 +31,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use bitcoin::CompressedPublicKey;
-use bitcoin::WScriptHash;
+use bitcoin::{CompressedPublicKey, TapLeafHash, TapSighashType};
 use bitcoin::{
     Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness,
     absolute,
@@ -52,7 +51,8 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{fs, str::FromStr};
-use bitcoin::taproot::TaprootBuilder;
+use bitcoin::sighash::Prevouts;
+use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 20_000;
@@ -286,25 +286,28 @@ fn main() -> anyhow::Result<()> {
     // 3. Build locking scripts for F1 & F2 (for the chosen flow)
     // --------------------------------------------------------------------
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
+
     let f1_lock =
         build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
+
+    let sk_keypair = secp256k1::Keypair::from_secret_key(&secp, &sk_signer);
+    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(
+        &sk_keypair,
+    ).0;
     let _f2_lock =
         build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
-    // P2WSH wrapper for F1 output
-    let f1_wsh = WScriptHash::hash(f1_lock.as_bytes());
-    let f1_spk = ScriptBuf::new_p2wsh(&f1_wsh);
+    //// P2WSH wrapper for F1 output
+    //let f1_wsh = WScriptHash::hash(f1_lock.as_bytes());
+    //let f1_spk = ScriptBuf::new_p2wsh(&f1_wsh);
 
-//    let x_only_pk = bitcoin::key::XOnlyPublicKey::from(&pk_signer);
-//    let taproot_tree = TaprootBuilder::new()
-//        .add_leaf(0, f1_lock)
-//        .expect("valid leaf");
-//    // Final Taproot output key
-//    let taproot_info = taproot_tree.finalize(&secp, x_only_pk).unwrap();
-//    let output_key = taproot_info.output_key();
-//    let f1_tr= Address::p2tr_tweaked(output_key, bitcoin::Network::Regtest);
-//
-//    let f1_spk = ScriptBuf::new_p2tr(&f1_tr, x_only_pk, None);
+    let taproot_tree = TaprootBuilder::new()
+        .add_leaf(0, f1_lock.clone())
+        .expect("valid leaf");
+    // Final Taproot output key
+    let spend_info = taproot_tree.finalize(&secp, x_only_pk).unwrap();
+    let output_key = spend_info.output_key();
+    let f1_tr_addr= Address::p2tr_tweaked(output_key, Network::Regtest);
 
     // --------------------------------------------------------------------
     // 4. Construct tx_f1  (funding → F1 output)
@@ -325,7 +328,7 @@ fn main() -> anyhow::Result<()> {
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f1_output_value),
-            script_pubkey: f1_spk,
+            script_pubkey: f1_tr_addr.script_pubkey(),
         }],
     };
 
@@ -366,7 +369,7 @@ fn main() -> anyhow::Result<()> {
     // --------------------------------------------------------------------
     // 5. Construct tx_f2  (spend F1 output → Operator)
     // --------------------------------------------------------------------
-    let fee_f2 = estimate_fee_vbytes(150, args.fee_rate); // 1 input P2WSH + 1 output
+    let fee_f2 = estimate_fee_vbytes(17068, args.fee_rate); // 1 input P2WSH + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
@@ -385,34 +388,45 @@ fn main() -> anyhow::Result<()> {
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f2_output_value),
-            script_pubkey: operator_addr.script_pubkey(),
+            script_pubkey: f1_tr_addr.script_pubkey(), //operator_addr.script_pubkey(),
         }],
     };
 
-    // Build the witness stack for the P2WSH spend
-    let mut cache_f2 = SighashCache::new(&mut tx_f2);
-    let sighash_f2 = cache_f2.p2wsh_signature_hash(
-        0,
-        &f1_lock,
-        Amount::from_sat(f1_output_value),
-        EcdsaSighashType::All,
-    )?;
-    let sig_f2 = secp.sign_ecdsa(&Message::from_digest_slice(&sighash_f2[..])?, &sk_signer);
-    let mut sig_f2_ser = sig_f2.serialize_der().to_vec();
-    sig_f2_ser.push(EcdsaSighashType::All as u8);
+    // Build the witness stack for the P2TR spend
+    let leaf_hash = TapLeafHash::from_script(&f1_lock, LeafVersion::TapScript);
+
+    println!("f1_tx: {:?}", tx_f1);
+    let mut cache = SighashCache::new(&mut tx_f2);
+    let sighash = cache
+        .taproot_script_spend_signature_hash(
+            0,
+            &Prevouts::All(&[tx_f1.output[0].clone()]),
+            leaf_hash,
+            TapSighashType::Default,
+        )
+        .unwrap();
+
+    let msg = Message::from_digest_slice(&sighash[..])?;
+    let sig = secp.sign_schnorr(&msg, &sk_keypair);
+    let sig_f2_ser = sig.serialize().to_vec();
+
+    // === Step 4: Assemble witness ===
+    let control_block = spend_info
+        .control_block(&(f1_lock.clone(), LeafVersion::TapScript))
+        .unwrap();
 
     // Encode flow_id & x as minimal‑encoded script numbers
     let flow_id_enc = encode_scriptnum(flow_id as i64);
     let x_enc = encode_scriptnum(args.x as i64);
 
     tx_f2.input[0].witness =
-        Witness::from_slice(&[sig_f2_ser, flow_id_enc, x_enc, f1_lock.to_bytes()]);
+        Witness::from_slice(&[flow_id_enc, x_enc, sig_f2_ser, f1_lock.to_bytes(), control_block.serialize()]);
 
-    let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
-    let f2_output_value = f1_output_value
-        .checked_sub(fee_f2)
-        .expect("f1 output too small for f2 fee");
-    tx_f2.output[0].value = Amount::from_sat(f2_output_value);
+    //let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
+    //let f2_output_value = f1_output_value
+    //    .checked_sub(fee_f2)
+    //    .expect("f1 output too small for f2 fee");
+    //tx_f2.output[0].value = Amount::from_sat(f2_output_value);
 
     let tx_f2_hex = tx_f2.raw_hex();
     let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
@@ -464,15 +478,16 @@ fn main() -> anyhow::Result<()> {
     let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
     println!("f1 confirming, please wait for the mining blocks, {}", f1_txid);
 
-    rpc_client.generate_to_address(1, &signer_addr).unwrap();
+    rpc_client.generate_to_address(101, &signer_addr).unwrap();
 
-    wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
+    wait_for_confirmation(&rpc_client, &f1_txid, 101, 60)?;
     println!("f1 confirmed");
 
     println!("sending f2...");
     let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
     println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
-    wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
+    rpc_client.generate_to_address(101, &signer_addr).unwrap();
+    wait_for_confirmation(&rpc_client, &f2_txid, 101, 60)?;
     println!("f2 confirmed");
     Ok(())
 }
@@ -576,5 +591,14 @@ mod tests {
         let script = encode_scriptnum(n);
         let expect = vec![0xe8, 0x03];
         assert_eq!(script, expect);
+    }
+
+    #[test]
+    pub fn test_sk_wif() {
+        let sk = SecretKey::from_slice(&[0x01; 32]).unwrap();
+        let wif = sk_to_wif(&sk);
+
+        let sk2 = wif_to_sk(&wif);
+        assert_eq!(sk, sk2);
     }
 }

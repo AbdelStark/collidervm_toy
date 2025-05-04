@@ -13,7 +13,7 @@ fi
 # Default command for bitcoin-cli. Override with BITCOIN_CLI_CMD_DEMO env var.
 readonly DEFAULT_BITCOIN_CLI="bitcoin-cli -signet"
 # Default funding amount in BTC (adjust as needed for Signet fees + demo value)
-readonly DEFAULT_FUNDING_AMOUNT_BTC="0.0002"
+readonly DEFAULT_FUNDING_AMOUNT_BTC="0.002"
 # Amount required by the demo binary (in satoshis)
 readonly REQUIRED_AMOUNT_SAT=10000
 # Enable dry run mode (no actual bitcoin-cli calls)

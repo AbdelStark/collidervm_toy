@@ -55,7 +55,7 @@ use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
-const REQUIRED_AMOUNT_SAT: u64 = 20_000;
+const REQUIRED_AMOUNT_SAT: u64 = 200_000;
 /// Hard‑coded ColliderVM parameters (match the toy simulation)
 const L_PARAM: usize = 4;
 const B_PARAM: usize = 16; // multiple of 8 ≤ 32
@@ -369,7 +369,7 @@ fn main() -> anyhow::Result<()> {
     // --------------------------------------------------------------------
     // 5. Construct tx_f2  (spend F1 output → Operator)
     // --------------------------------------------------------------------
-    let fee_f2 = estimate_fee_vbytes(17068, args.fee_rate); // 1 input P2WSH + 1 output
+    let fee_f2 = estimate_fee_vbytes(20000, args.fee_rate); // 1 input P2WSH + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
@@ -419,8 +419,21 @@ fn main() -> anyhow::Result<()> {
     let flow_id_enc = encode_scriptnum(flow_id as i64);
     let x_enc = encode_scriptnum(args.x as i64);
 
+    let message = [
+        x_enc,
+        nonce.to_le_bytes()[0..4].try_into().unwrap(),
+        nonce.to_le_bytes()[4..8].try_into().unwrap(),
+    ].concat();
+    let msg_push_script_f1 = bitvm::hash::blake3::blake3_push_message_script_with_limb(&message, 4).compile();
+
+    println!("message: {}kb, sig: {}kb, f1 lock: {}kb, control: {}kb",
+             msg_push_script_f1.to_bytes().len()/1024,
+              sig_f2_ser.len()/1024,
+             f1_lock.to_bytes().len()/1024,
+             control_block.serialize().len()/1024,
+    );
     tx_f2.input[0].witness =
-        Witness::from_slice(&[flow_id_enc, x_enc, sig_f2_ser, f1_lock.to_bytes(), control_block.serialize()]);
+        Witness::from_slice(&[msg_push_script_f1.to_bytes(), sig_f2_ser, f1_lock.to_bytes(), control_block.serialize()]);
 
     //let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
     //let f2_output_value = f1_output_value
@@ -483,12 +496,14 @@ fn main() -> anyhow::Result<()> {
     wait_for_confirmation(&rpc_client, &f1_txid, 101, 60)?;
     println!("f1 confirmed");
 
-    println!("sending f2...");
-    let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
-    println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
-    rpc_client.generate_to_address(101, &signer_addr).unwrap();
-    wait_for_confirmation(&rpc_client, &f2_txid, 101, 60)?;
-    println!("f2 confirmed");
+    // println!("sending f2...");
+    // let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
+    // println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
+    // rpc_client.generate_to_address(101, &signer_addr).unwrap();
+    // wait_for_confirmation(&rpc_client, &f2_txid, 101, 60)?;
+    // println!("f2 confirmed");
+    let test_res = rpc_client.test_mempool_accept(&vec![tx_f2.raw_hex()]).unwrap();
+    println!("Test result: {:?}", test_res);
     Ok(())
 }
 

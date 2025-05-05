@@ -337,32 +337,25 @@ fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
 /// duplicates (keeps) the first 8 nibbles, accumulates them into `x`,
 /// leaves `x` on the *altstack*, original 24 nibbles untouched.
 fn build_script_reconstruct_x() -> ScriptBuf {
-    let mut b = Builder::new()
-        .push_int(0) // acc = 0
-        .push_opcode(opcodes::all::OP_TOALTSTACK);
+    let mut b = Builder::new().push_int(0); // acc = 0
 
     for i in 0..8 {
-        b = b
-            .push_opcode(opcodes::all::OP_DEPTH)
-            .push_opcode(opcodes::all::OP_1SUB)
-            .push_int(i as i64)
-            .push_opcode(opcodes::all::OP_SUB)
-            .push_opcode(opcodes::all::OP_PICK)
-            .push_opcode(opcodes::all::OP_FROMALTSTACK); // nib acc
-
         // acc *= 16
         for _ in 0..4 {
             b = b
                 .push_opcode(opcodes::all::OP_DUP)
                 .push_opcode(opcodes::all::OP_ADD);
         }
-        // acc += nib
+
         b = b
-            .push_opcode(opcodes::all::OP_SWAP) // acc nib  → nib acc
-            .push_opcode(opcodes::all::OP_ADD) // consume nib copy
-            .push_opcode(opcodes::all::OP_TOALTSTACK); // store new acc
+            .push_opcode(opcodes::all::OP_DEPTH)
+            .push_opcode(opcodes::all::OP_1SUB)
+            .push_int(i as i64)
+            .push_opcode(opcodes::all::OP_SUB)
+            .push_opcode(opcodes::all::OP_PICK);
+        // acc += nib
+        b = b.push_opcode(opcodes::all::OP_ADD);
     }
-    b = b.push_opcode(opcodes::all::OP_FROMALTSTACK);
     b.into_script()
 }
 

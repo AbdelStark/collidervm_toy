@@ -335,7 +335,7 @@ fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
 }
 
 /// duplicates (keeps) the first 8 nibbles, accumulates them into `x`,
-/// leaves `x` on the *altstack*, original 24 nibbles untouched.
+/// leaves `x` on the stack, original 24 nibbles untouched.
 fn build_script_reconstruct_x() -> ScriptBuf {
     let mut b = Builder::new().push_int(0); // acc = 0
 

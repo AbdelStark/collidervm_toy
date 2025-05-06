@@ -45,7 +45,7 @@ use bitcoincore_rpc::{Auth, Client, RawTx, RpcApi, json};
 use clap::Parser;
 use collidervm_toy::core::{
     build_script_f1_blake3_locked, build_script_f2_blake3_locked, find_valid_nonce,
-    flow_id_to_prefix_bytes,
+    flow_id_to_prefix_bytes, blake3_message_push_limbs_script
 };
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,8 @@ use std::time::Duration;
 use std::{fs, str::FromStr};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+pub use bitcoin_script::script;
+pub use bitcoin_script::builder::StructuredScript as Script;
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 200_000;
@@ -424,16 +426,24 @@ fn main() -> anyhow::Result<()> {
         nonce.to_le_bytes()[0..4].try_into().unwrap(),
         nonce.to_le_bytes()[4..8].try_into().unwrap(),
     ].concat();
-    let msg_push_script_f1 = bitvm::hash::blake3::blake3_push_message_script_with_limb(&message, 4).compile();
+
+    // A Script object that, when executed, leaves the packed limbs on stack
+    let msg_push_script_f1 = blake3_message_push_limbs_script(&message, 4).compile();
 
     println!("message: {}kb, sig: {}kb, f1 lock: {}kb, control: {}kb",
              msg_push_script_f1.to_bytes().len()/1024,
-              sig_f2_ser.len()/1024,
+             sig_f2_ser.len()/1024,
              f1_lock.to_bytes().len()/1024,
              control_block.serialize().len()/1024,
     );
+
     tx_f2.input[0].witness =
-        Witness::from_slice(&[msg_push_script_f1.to_bytes(), sig_f2_ser, f1_lock.to_bytes(), control_block.serialize()]);
+        Witness::from_slice(&[
+            msg_push_script_f1.to_bytes(), 
+            sig_f2_ser, 
+            f1_lock.to_bytes(), 
+            control_block.serialize()
+        ]);
 
     //let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
     //let f2_output_value = f1_output_value

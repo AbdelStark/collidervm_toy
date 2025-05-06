@@ -4,10 +4,13 @@ use bitcoin::{
     opcodes::{self, OP_TRUE},
 };
 use bitcoin_hashes::{HashEngine, sha256};
+pub use bitcoin_script::script;
+pub use bitcoin_script::builder::StructuredScript as Script;
 use bitcoin_script_stack::optimizer;
 use bitvm::hash::blake3::blake3_compute_script_with_limb;
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use secp256k1::{Keypair, Message, SecretKey, schnorr::Signature};
 use std::{
     collections::HashMap,
@@ -379,7 +382,8 @@ pub fn build_script_f1_blake3_locked(
     // 1) Script to check signature
     let verify_signature_script = {
         let mut b = Builder::new();
-        b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
+//        b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
+        b = b.push_key(signer_pubkey);
         b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
     };
 
@@ -526,6 +530,103 @@ pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
     rate as u64
 }
 
+
+// fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
+//     let len            = message_bytes.len();
+//     let needed_padding = if len % 64 == 0 { 0 } else { 64 - (len % 64) };
+
+//     message_bytes
+//         .iter()
+//         .copied()
+//         .chain(std::iter::repeat(0u8).take(needed_padding))
+//         .chunks(4)
+//         .into_iter()
+//         .flat_map(|c| c.collect::<Vec<u8>>().into_iter().rev()) // LE‑ify 4‑byte words
+//         .chunks(64)
+//         .into_iter()
+//         .map(|mut c| std::array::from_fn(|_| c.next().unwrap()))
+//         .collect()
+// }
+
+fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
+    let len = message_bytes.len();
+    let needed_padding_bytes = if len % 64 == 0 { 0 } else { 64 - (len % 64) };
+
+    message_bytes
+        .iter()
+        .copied()
+        .chain(std::iter::repeat(0u8).take(needed_padding_bytes))
+        .chunks(4) // reverse 4-byte chunks
+        .into_iter()
+        .flat_map(|chunk| chunk.collect::<Vec<u8>>().into_iter().rev())
+        // .flat_map(|chunk| chunk.collect::<Vec<u8>>())
+        .chunks(64) // collect 64-byte chunks
+        .into_iter()
+        .map(|mut chunk| std::array::from_fn(|_| chunk.next().unwrap()))
+        .collect()
+}
+
+fn pack_32_bytes_to_limbs(bytes: &[u8; 32], limb_len: u8) -> Vec<u32> {
+    let mut acc   = 0u64;
+    let mut bits  = 0usize;
+    let mask      = (1u64 << limb_len) - 1;
+    let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1) / limb_len as usize);
+
+    for &byte in bytes {               // big‑endian: shift current accumulator left
+        acc  = (acc << 8) | byte as u64;
+        bits += 8;
+
+        while bits >= limb_len as usize {
+            let shift = bits - limb_len as usize;
+            limbs.push(((acc >> shift) & mask) as u32);
+            bits -= limb_len as usize;
+            acc  &= (1u64 << bits) - 1; // clear the bits we just used
+        }
+    }
+    if bits > 0 {
+        limbs.push((acc << (limb_len as usize - bits)) as u32);
+    }
+    limbs
+}
+
+pub fn blake3_message_to_limbs(message_bytes: &[u8], limb_len: u8) -> Vec<u32> {
+    assert!(
+        message_bytes.len() <= 1024,
+        "This BLAKE3 implementation doesn't support messages longer than 1024 bytes"
+    );
+    assert!(
+        (4..32).contains(&limb_len),
+        "limb length must be in the range [4, 32)"
+    );
+
+    println!("message_bytes: {:?}", message_bytes);
+
+    let chunks = chunk_message(message_bytes);
+    let mut limbs = Vec::new();
+
+    println!("chunks: {:?}", chunks);
+
+    for chunk in chunks.into_iter() {
+        limbs.extend(pack_32_bytes_to_limbs(&chunk[..32].try_into().unwrap(), limb_len));
+        limbs.extend(pack_32_bytes_to_limbs(&chunk[32..].try_into().unwrap(), limb_len));
+    }
+
+    println!("limbs: {:?}", limbs);
+
+    limbs
+}
+
+pub fn blake3_message_push_limbs_script(
+    message_bytes: &[u8],
+    limb_len: u8,
+) -> Script {
+    script! {
+        for limb in blake3_message_to_limbs(message_bytes, limb_len).into_iter() {
+            { limb }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,6 +677,10 @@ mod tests {
             nonce.to_le_bytes()[4..8].try_into().unwrap(),
         ]
         .concat();
+
+        // A Script object that, when executed, leaves the packed limbs on stack
+        // let msg_push_script_f1 = blake3_message_push_limbs_script(&message, 4).compile();
+
         let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
 
         // Create PushBytesBuf for all raw bytes for F1
@@ -657,58 +762,62 @@ mod tests {
     }
 
     fn build_f1_e2e_script(test_case: &ColliderVmTestCase) -> ScriptBuf {
-        // ******************************************************
-        // CONSTRUCT A DEBUGGING SCRIPT
-        // ******************************************************
+        // // ******************************************************
+        // // CONSTRUCT A DEBUGGING SCRIPT
+        // // ******************************************************
 
-        let total_msg_len = 12;
-        let limb_len = 4;
+        // let total_msg_len = 12;
+        // let limb_len = 4;
 
-        // 0)  signature
-        let signature_check = Builder::new()
-            .push_key(&test_case.signer_pubkey)
-            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
-            .into_script();
+        // // 0)  signature
+        // let signature_check = Builder::new()
+        //     .push_key(&test_case.signer_pubkey)
+        //     .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
+        //     .into_script();
 
-        // 1)  reconstruct x  (keeps message)
-        let reconstruct_x = build_script_reconstruct_x();
+        // // 1)  reconstruct x  (keeps message)
+        // let reconstruct_x = build_script_reconstruct_x();
 
-        // 2)  x > 100 (non-destructive)
-        let x_test = Builder::new()
-            .push_int(F1_THRESHOLD as i64)
-            .push_opcode(opcodes::all::OP_GREATERTHAN)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .into_script();
+        // // 2)  x > 100 (non-destructive)
+        // let x_test = Builder::new()
+        //     .push_int(F1_THRESHOLD as i64)
+        //     .push_opcode(opcodes::all::OP_GREATERTHAN)
+        //     .push_opcode(opcodes::all::OP_VERIFY)
+        //     .into_script();
 
-        // 3)  BLAKE-3(message)
-        let compute_blake3 = {
-            let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
-            let optim = optimizer::optimize(compiled);
-            ScriptBuf::from_bytes(optim.to_bytes())
-        };
+        // // 3)  BLAKE-3(message)
+        // let compute_blake3 = {
+        //     let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
+        //     let optim = optimizer::optimize(compiled);
+        //     ScriptBuf::from_bytes(optim.to_bytes())
+        // };
 
-        // 4)  drop the 64-needed-nibbles minus prefix_len
-        let drop_excess = {
-            let mut b = Builder::new();
-            for _ in 0..(64 - test_case.flow_id_prefix.len()) {
-                b = b.push_opcode(opcodes::all::OP_DROP);
-            }
-            b.into_script()
-        };
+        // // 4)  drop the 64-needed-nibbles minus prefix_len
+        // let drop_excess = {
+        //     let mut b = Builder::new();
+        //     for _ in 0..(64 - test_case.flow_id_prefix.len()) {
+        //         b = b.push_opcode(opcodes::all::OP_DROP);
+        //     }
+        //     b.into_script()
+        // };
 
-        // 5)  compare prefix & succeed
-        let prefix_cmp = build_prefix_equalverify(&test_case.flow_id_prefix);
-        let success = Builder::new().push_opcode(OP_TRUE).into_script();
+        // // 5)  compare prefix & succeed
+        // let prefix_cmp = build_prefix_equalverify(&test_case.flow_id_prefix);
+        // let success = Builder::new().push_opcode(OP_TRUE).into_script();
 
-        let debug_script = combine_scripts(&[
-            signature_check,
-            reconstruct_x,
-            x_test,
-            compute_blake3,
-            drop_excess,
-            prefix_cmp,
-            success,
-        ]);
+        // let debug_script = combine_scripts(&[
+        //     signature_check,
+        //     reconstruct_x,
+        //     x_test,
+        //     compute_blake3,
+        //     drop_excess,
+        //     prefix_cmp,
+        //     success,
+        // ]);
+
+        let debug_script = build_script_f1_blake3_locked(
+            &test_case.signer_pubkey, &test_case.flow_id_prefix, test_case.b
+        );
 
         // ******************************************************
         // EXECUTE THE DEBUGGING SCRIPT
@@ -746,6 +855,38 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
+        assert!(f1_res.success);
+    }
+
+    #[test]
+    fn test_debug_tapscript_arguments_preparation() {
+        // Create an input value that will fill the 4 bytes
+        let input_value =  123_u32; // u32::from_be_bytes([0x12, 0x34, 0x56, 0x78]);
+        let nonce = 3545_u64; // u64::from_be_bytes([0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x21, 0x43]);
+
+        let message = [
+            input_value.to_le_bytes(),
+            nonce.to_le_bytes()[0..4].try_into().unwrap(),
+            nonce.to_le_bytes()[4..8].try_into().unwrap(),
+        ]
+        .concat();
+        println!("input_value: {input_value}");
+        println!("nonce: {nonce}");
+        println!("message: {}", hex::encode(message.clone()));
+
+        let script = blake3_push_message_script_with_limb(&message, 4).compile();
+        let script = ScriptBuf::from_bytes(script.to_bytes());
+        let res = execute_script_buf(script);
+        println!("exec_stats={:?}", res.stats);
+        println!("final_stack={:?}", res.final_stack);
+
+        let script = blake3_message_push_limbs_script(&message, 4).compile();
+        let script = ScriptBuf::from_bytes(script.to_bytes());
+        let res = execute_script_buf(script);
+        println!("exec_stats={:?}", res.stats);
+        println!("final_stack={:?}", res.final_stack);
+
+        assert!(false);
     }
 
     #[test]

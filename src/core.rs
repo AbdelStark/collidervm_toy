@@ -382,8 +382,7 @@ pub fn build_script_f1_blake3_locked(
     // 1) Script to check signature
     let verify_signature_script = {
         let mut b = Builder::new();
-//        b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
-        b = b.push_key(signer_pubkey);
+        b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
         b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
     };
 

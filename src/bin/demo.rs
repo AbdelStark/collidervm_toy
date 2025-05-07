@@ -49,7 +49,7 @@ use collidervm_toy::core::{
     find_valid_nonce, flow_id_to_prefix_bytes,
 };
 use colored::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
 use std::time::Duration;
 
@@ -105,21 +105,21 @@ struct Args {
 }
 
 /// Structure for serializing key details to JSON
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct KeyInfo {
     pub signer: KeyPair,
     pub operator: KeyPair,
 }
 
 /// Structure for serializing individual key pairs to JSON
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct KeyPair {
     pub address: String,
     pub wif: String,
 }
 
 /// Structure for serializing transaction details to JSON
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct TransactionInfo {
     f1: TxInfo,
     f2: TxInfo,
@@ -128,14 +128,14 @@ struct TransactionInfo {
 }
 
 /// Structure for serializing individual transaction information
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct TxInfo {
     txid: String,
     file_path: String,
 }
 
 /// Complete demo output for JSON serialization
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct DemoOutput {
     pub keys: KeyInfo,
     transactions: Option<TransactionInfo>,
@@ -144,7 +144,7 @@ struct DemoOutput {
 }
 
 /// Parameters used in the demo for JSON serialization
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct DemoParameters {
     required_amount_sat: u64,
     l_param: usize,

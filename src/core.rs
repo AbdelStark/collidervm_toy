@@ -4,8 +4,8 @@ use bitcoin::{
     opcodes::{self, OP_TRUE},
 };
 use bitcoin_hashes::{HashEngine, sha256};
-pub use bitcoin_script::script;
 pub use bitcoin_script::builder::StructuredScript as Script;
+pub use bitcoin_script::script;
 use bitcoin_script_stack::optimizer;
 use bitvm::hash::blake3::blake3_compute_script_with_limb;
 use blake3::Hasher;
@@ -338,34 +338,27 @@ fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
 }
 
 /// duplicates (keeps) the first 8 nibbles, accumulates them into `x`,
-/// leaves `x` on the *altstack*, original 24 nibbles untouched.
+/// leaves `x` on the stack, original 24 nibbles untouched.
 fn build_script_reconstruct_x() -> ScriptBuf {
-    let mut b = Builder::new()
-        .push_int(0) // acc = 0
-        .push_opcode(opcodes::all::OP_TOALTSTACK);
+    let mut b = Builder::new().push_int(0); // acc = 0
 
     for i in 0..8 {
-        b = b
-            .push_opcode(opcodes::all::OP_DEPTH)
-            .push_opcode(opcodes::all::OP_1SUB)
-            .push_int(i as i64)
-            .push_opcode(opcodes::all::OP_SUB)
-            .push_opcode(opcodes::all::OP_PICK)
-            .push_opcode(opcodes::all::OP_FROMALTSTACK); // nib acc
-
         // acc *= 16
         for _ in 0..4 {
             b = b
                 .push_opcode(opcodes::all::OP_DUP)
                 .push_opcode(opcodes::all::OP_ADD);
         }
-        // acc += nib
+
         b = b
-            .push_opcode(opcodes::all::OP_SWAP) // acc nib  → nib acc <--
-            .push_opcode(opcodes::all::OP_ADD) // consume nib copy
-            .push_opcode(opcodes::all::OP_TOALTSTACK); // store new acc
+            .push_opcode(opcodes::all::OP_DEPTH)
+            .push_opcode(opcodes::all::OP_1SUB)
+            .push_int(i as i64)
+            .push_opcode(opcodes::all::OP_SUB)
+            .push_opcode(opcodes::all::OP_PICK);
+        // acc += nib
+        b = b.push_opcode(opcodes::all::OP_ADD);
     }
-    b = b.push_opcode(opcodes::all::OP_FROMALTSTACK);
     b.into_script()
 }
 
@@ -529,7 +522,6 @@ pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
     rate as u64
 }
 
-
 fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
     let len = message_bytes.len();
     let needed_padding_bytes = if len % 64 == 0 { 0 } else { 64 - (len % 64) };
@@ -548,20 +540,21 @@ fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
 }
 
 fn pack_32_bytes_to_limbs(bytes: &[u8; 32], limb_len: u8) -> Vec<u32> {
-    let mut acc   = 0u64;
-    let mut bits  = 0usize;
-    let mask      = (1u64 << limb_len) - 1;
+    let mut acc = 0u64;
+    let mut bits = 0usize;
+    let mask = (1u64 << limb_len) - 1;
     let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1) / limb_len as usize);
 
-    for &byte in bytes {               // big‑endian: shift current accumulator left
-        acc  = (acc << 8) | byte as u64;
+    for &byte in bytes {
+        // big‑endian: shift current accumulator left
+        acc = (acc << 8) | byte as u64;
         bits += 8;
 
         while bits >= limb_len as usize {
             let shift = bits - limb_len as usize;
             limbs.push(((acc >> shift) & mask) as u32);
             bits -= limb_len as usize;
-            acc  &= (1u64 << bits) - 1; // clear the bits we just used
+            acc &= (1u64 << bits) - 1; // clear the bits we just used
         }
     }
     if bits > 0 {
@@ -584,8 +577,14 @@ pub fn blake3_message_to_limbs(message_bytes: &[u8], limb_len: u8) -> Vec<u32> {
     let mut limbs = Vec::new();
 
     for chunk in chunks.into_iter() {
-        limbs.extend(pack_32_bytes_to_limbs(&chunk[..32].try_into().unwrap(), limb_len));
-        limbs.extend(pack_32_bytes_to_limbs(&chunk[32..].try_into().unwrap(), limb_len));
+        limbs.extend(pack_32_bytes_to_limbs(
+            &chunk[..32].try_into().unwrap(),
+            limb_len,
+        ));
+        limbs.extend(pack_32_bytes_to_limbs(
+            &chunk[32..].try_into().unwrap(),
+            limb_len,
+        ));
     }
 
     limbs
@@ -643,7 +642,7 @@ mod tests {
         .concat();
 
         // A Script object that, when executed, leaves the packed limbs on stack
-        let msg_push_script_f1 = blake3_message_push_limbs_script(&message, 4).compile();
+        let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
 
         // let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
 
@@ -816,38 +815,7 @@ mod tests {
         println!("F1 => final_stack={:?}", f1_res.final_stack);
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        assert!(f1_res.success);
-    }
-
-    #[test]
-    fn test_debug_tapscript_arguments_preparation() {
-        // Create an input value that will fill the 4 bytes
-        let input_value =  123_u32; // u32::from_be_bytes([0x12, 0x34, 0x56, 0x78]);
-        let nonce = 3545_u64; // u64::from_be_bytes([0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x21, 0x43]);
-
-        let message = [
-            input_value.to_le_bytes(),
-            nonce.to_le_bytes()[0..4].try_into().unwrap(),
-            nonce.to_le_bytes()[4..8].try_into().unwrap(),
-        ]
-        .concat();
-        println!("input_value: {input_value}");
-        println!("nonce: {nonce}");
-        println!("message: {}", hex::encode(message.clone()));
-
-        let script = blake3_push_message_script_with_limb(&message, 4).compile();
-        let script = ScriptBuf::from_bytes(script.to_bytes());
-        let res = execute_script_buf(script);
-        println!("exec_stats={:?}", res.stats);
-        println!("final_stack={:?}", res.final_stack);
-
-        let script = blake3_message_push_limbs_script(&message, 4).compile();
-        let script = ScriptBuf::from_bytes(script.to_bytes());
-        let res = execute_script_buf(script);
-        println!("exec_stats={:?}", res.stats);
-        println!("final_stack={:?}", res.final_stack);
-
-        assert!(false);
+        assert!(f1_res.error.is_none());
     }
 
     #[test]

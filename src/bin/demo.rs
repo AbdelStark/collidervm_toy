@@ -44,8 +44,7 @@ use bitcoin::{
 use bitcoincore_rpc::{Auth, Client, RawTx, RpcApi, json};
 use clap::Parser;
 use collidervm_toy::core::{
-    build_script_f1_blake3_locked, build_script_f2_blake3_locked, find_valid_nonce,
-    flow_id_to_prefix_bytes, blake3_message_push_limbs_script
+    blake3_message_to_limbs, build_script_f1_blake3_locked, build_script_f2_blake3_locked, find_valid_nonce, flow_id_to_prefix_bytes
 };
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -278,7 +277,7 @@ fn main() -> anyhow::Result<()> {
     let (nonce, flow_id, _hash) =
         find_valid_nonce(args.x, B_PARAM, L_PARAM).expect("nonce search should succeed quickly");
 
-    if !args.json {
+    if true || !args.json {
         println!(
             "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
         );
@@ -397,7 +396,6 @@ fn main() -> anyhow::Result<()> {
     // Build the witness stack for the P2TR spend
     let leaf_hash = TapLeafHash::from_script(&f1_lock, LeafVersion::TapScript);
 
-    println!("f1_tx: {:?}", tx_f1);
     let mut cache = SighashCache::new(&mut tx_f2);
     let sighash = cache
         .taproot_script_spend_signature_hash(
@@ -417,33 +415,26 @@ fn main() -> anyhow::Result<()> {
         .control_block(&(f1_lock.clone(), LeafVersion::TapScript))
         .unwrap();
 
-    // Encode flow_id & x as minimal‑encoded script numbers
-    let flow_id_enc = encode_scriptnum(flow_id as i64);
-    let x_enc = encode_scriptnum(args.x as i64);
+    // // Encode flow_id & x as minimal‑encoded script numbers
+    // let flow_id_enc = encode_scriptnum(flow_id as i64);
+    // let x_enc = encode_scriptnum(args.x as i64);
 
     let message = [
-        x_enc,
+        args.x.to_le_bytes(),
         nonce.to_le_bytes()[0..4].try_into().unwrap(),
         nonce.to_le_bytes()[4..8].try_into().unwrap(),
     ].concat();
 
-    // A Script object that, when executed, leaves the packed limbs on stack
-    let msg_push_script_f1 = blake3_message_push_limbs_script(&message, 4).compile();
+    let mut witness = bitcoin::Witness::new();
+    for limb in blake3_message_to_limbs(&message, 4) { 
+        witness.push(encode_scriptnum(limb.into()));
+    };
 
-    println!("message: {}kb, sig: {}kb, f1 lock: {}kb, control: {}kb",
-             msg_push_script_f1.to_bytes().len()/1024,
-             sig_f2_ser.len()/1024,
-             f1_lock.to_bytes().len()/1024,
-             control_block.serialize().len()/1024,
-    );
+    witness.push(sig_f2_ser.clone());
+    witness.push(f1_lock.to_bytes());
+    witness.push(control_block.serialize());
 
-    tx_f2.input[0].witness =
-        Witness::from_slice(&[
-            msg_push_script_f1.to_bytes(), 
-            sig_f2_ser, 
-            f1_lock.to_bytes(), 
-            control_block.serialize()
-        ]);
+    tx_f2.input[0].witness = witness;
 
     //let fee_f2 = estimate_fee_vbytes(tx_f2.vsize(), args.fee_rate);
     //let f2_output_value = f1_output_value
@@ -501,19 +492,24 @@ fn main() -> anyhow::Result<()> {
     let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
     println!("f1 confirming, please wait for the mining blocks, {}", f1_txid);
 
-    rpc_client.generate_to_address(101, &signer_addr).unwrap();
+    rpc_client.generate_to_address(1, &signer_addr).unwrap();
 
-    wait_for_confirmation(&rpc_client, &f1_txid, 101, 60)?;
+    wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
     println!("f1 confirmed");
 
-    // println!("sending f2...");
-    // let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
-    // println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
-    // rpc_client.generate_to_address(101, &signer_addr).unwrap();
-    // wait_for_confirmation(&rpc_client, &f2_txid, 101, 60)?;
-    // println!("f2 confirmed");
-    let test_res = rpc_client.test_mempool_accept(&vec![tx_f2.raw_hex()]).unwrap();
-    println!("Test result: {:?}", test_res);
+    println!("f1 txid: {}", tx_f1.compute_txid());
+    println!("f2 txid: {}", tx_f2.compute_txid());
+
+    println!("sending f2...");
+    let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
+    println!("f2 confirming, please wait for the mining blocks, {}", f2_txid);
+    rpc_client.generate_to_address(1, &signer_addr).unwrap();
+    wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
+    println!("f2 confirmed");
+
+    // let test_res = rpc_client.test_mempool_accept(&vec![tx_f2.raw_hex()]).unwrap();
+    // println!("====\nTest result: {:?}\n====", test_res);
+
     Ok(())
 }
 

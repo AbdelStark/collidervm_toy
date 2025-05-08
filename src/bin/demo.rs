@@ -50,8 +50,8 @@ use collidervm_toy::core::{
 };
 use colored::*;
 use serde::Serialize;
-use std::fs;
 use std::time::Duration;
+use std::{fs, str::FromStr};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 200_000;
@@ -80,7 +80,11 @@ struct Args {
     #[arg(long)]
     json_output_file: Option<String>,
 
-    /// Network
+    /// receiver of the spending tx
+    #[arg(long)]
+    receiver: String,
+
+    /// Network name
     #[arg(short, long, default_value = "regtest")]
     network: String,
 
@@ -182,8 +186,7 @@ fn main() -> anyhow::Result<()> {
     let signer_compressed_pk = CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
     let signer_addr = Address::p2wpkh(&signer_compressed_pk, network);
 
-    let operator_compressed_pk =
-        CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_operator))?;
+    let operator_compressed_pk = CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
     let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
 
     // Prepare key information for output
@@ -263,12 +266,10 @@ fn main() -> anyhow::Result<()> {
         ).map_err(|err| {
             panic!(
                 "Error: {}, please run:\n
-docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword={} walletpassphrase {} 600\n",
-                err, args.rpc_user, args.rpc_password, args.wallet_passphrase
+docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} walletpassphrase {} 600\n",
+                err, args.network, args.rpc_user, args.rpc_password, args.wallet_passphrase
             );
         }).unwrap();
-        // mine a block
-        rpc_client.generate_to_address(1, &signer_addr)?;
 
         let confirmed_funding_tx = rpc_client.get_raw_transaction(&funding_tx, None).unwrap();
         let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
@@ -284,8 +285,6 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
         txid: funding_txid,
         vout: funding_vout,
     };
-
-    println!("funding_outpoint: {}", funding_outpoint);
 
     // In a production‑ready tool we would RPC‑query the node to retrieve the
     // exact amount & pkScript of the funding UTXO.  To keep the demo
@@ -386,7 +385,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
     // --------------------------------------------------------------------
 
     // Now the tx vsize is about 17088.
-    let fee_f2 = estimate_fee_vbytes(17088, args.fee_rate); // 1 input P2WSH + 1 output
+    let fee_f2 = estimate_fee_vbytes(17088, args.fee_rate); // 1 input P2TR + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
@@ -439,7 +438,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
     ]
     .concat();
 
-    let mut witness = bitcoin::Witness::new();
+    let mut witness = Witness::new();
     for limb in blake3_message_to_limbs(&message, 4) {
         witness.push(encode_scriptnum(limb.into()));
     }
@@ -463,6 +462,62 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
             "---------------------------------------------".dimmed()
         );
     }
+
+    // --------------------------------------------------------------------
+    // 6. Construct spending tx  (spend F2 output → Receiver)
+    // --------------------------------------------------------------------
+    let fee_spending_tx = estimate_fee_vbytes(111, args.fee_rate); // 1 input P2WPKH + 1 output
+    let spending_output_value = f2_output_value
+        .checked_sub(fee_spending_tx)
+        .expect("f2 output too small for spending tx");
+
+    let receiver = Address::from_str(&args.receiver)?.require_network(network)?;
+    // Sign the funding input (P2WPKH)
+    let operator_pkh = operator_addr
+        .witness_program()
+        .expect("addr")
+        .program() // 20 bytes = hash160(pubkey)
+        .to_owned();
+    let script_code =
+        ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_slice(operator_pkh.as_bytes())?);
+    let mut spending_tx = bitcoin::Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx_f2_id,
+                vout: 0,
+            },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(spending_output_value),
+            script_pubkey: receiver.script_pubkey(),
+        }],
+    };
+
+    let mut sighash_cache = SighashCache::new(&mut spending_tx);
+    let sighash = sighash_cache
+        .p2wsh_signature_hash(
+            0,
+            &script_code,
+            Amount::from_sat(f2_output_value),
+            EcdsaSighashType::All,
+        )
+        .unwrap();
+
+    let msg = Message::from_digest_slice(&sighash[..])?;
+    let sig = secp.sign_ecdsa(&msg, &sk_operator);
+    let mut sig_bytes = sig.serialize_der().to_vec();
+    sig_bytes.push(EcdsaSighashType::All.to_u32() as u8);
+
+    // Witness stack = [<signature> <witness_script>]
+    spending_tx.input[0].witness = Witness::from(vec![
+        sig_bytes,
+        PublicKey::new(pk_operator).to_bytes().to_vec(),
+    ]);
 
     // Update transaction information for JSON output
     demo_output.transactions = Some(TransactionInfo {
@@ -498,18 +553,21 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
     println!("f2 txid: {}", tx_f2.compute_txid());
 
     if !args.dry_run {
-        println!("sending f1, txid: {}", tx_f1.compute_txid());
+        println!("pushed f1, txid: {}", tx_f1.compute_txid());
         let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
-        rpc_client.generate_to_address(1, &signer_addr).unwrap();
 
         wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
         println!("f1 confirmed");
 
-        println!("sending f2, txid: {}", tx_f2.compute_txid());
+        println!("pushed f2, txid: {}", tx_f2.compute_txid());
         let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
-        rpc_client.generate_to_address(1, &signer_addr).unwrap();
         wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
         println!("f2 confirmed");
+
+        println!("pushed spending tx, txid: {}", spending_tx.compute_txid());
+        let spending_tx_txid = rpc_client.send_raw_transaction(&spending_tx)?;
+        wait_for_confirmation(&rpc_client, &spending_tx_txid, 1, 60)?;
+        println!("spending tx confirmed");
     }
 
     Ok(())
@@ -567,7 +625,7 @@ fn wait_for_confirmation(
         match rpc_client.get_raw_transaction_info(txid, None) {
             Ok(tx_info) => {
                 if let Some(c) = tx_info.confirmations {
-                    println!("Confirmations: {}", confirmations);
+                    println!("Confirmations: {confirmations}");
                     if c >= confirmations {
                         println!("✅ Transaction is confirmed!");
                         break;
@@ -577,7 +635,6 @@ fn wait_for_confirmation(
                 }
             }
             Err(e) => {
-                println!("Error fetching transaction info: {}", e);
                 anyhow::bail!(e);
             }
         }

@@ -299,11 +299,9 @@ docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser={} --rpcpassword
     let (nonce, flow_id, _hash) =
         find_valid_nonce(args.x, B_PARAM, L_PARAM).expect("nonce search should succeed quickly");
 
-    if true || args.dry_run {
-        println!(
-            "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
-        );
-    }
+    println!(
+        "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
+    );
 
     // --------------------------------------------------------------------
     // 3. Build locking scripts for F1 & F2 (for the chosen flow)
@@ -548,7 +546,7 @@ fn estimate_fee_vbytes(vbytes: usize, rate: u64) -> u64 {
 
 /// Convert a SecretKey to WIF (signet/testnet)
 fn sk_to_wif(sk: &SecretKey, network: Network) -> String {
-    let priv_key = bitcoin::PrivateKey::new(sk.clone(), network);
+    let priv_key = bitcoin::PrivateKey::new(*sk, network);
     priv_key.to_wif()
 }
 
@@ -566,7 +564,7 @@ fn wait_for_confirmation(
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     loop {
-        match rpc_client.get_raw_transaction_info(&txid, None) {
+        match rpc_client.get_raw_transaction_info(txid, None) {
             Ok(tx_info) => {
                 if let Some(c) = tx_info.confirmations {
                     println!("Confirmations: {}", confirmations);

@@ -543,7 +543,7 @@ fn pack_32_bytes_to_limbs(bytes: &[u8; 32], limb_len: u8) -> Vec<u32> {
     let mut acc = 0u64;
     let mut bits = 0usize;
     let mask = (1u64 << limb_len) - 1;
-    let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1) / limb_len as usize);
+    let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1).div_ceil(limb_len as usize));
 
     for &byte in bytes {
         // big‑endian: shift current accumulator left

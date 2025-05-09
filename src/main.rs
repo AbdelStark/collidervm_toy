@@ -49,7 +49,6 @@ use collidervm_toy::core::{
     find_valid_nonce, flow_id_to_prefix_bytes,
 };
 use collidervm_toy::utils::{encode_scriptnum, estimate_fee_vbytes, sk_to_wif, wait_for_confirmation, wif_to_sk};
-use colored::*;
 use serde::Serialize;
 use std::{fs, str::FromStr};
 
@@ -307,49 +306,38 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // --------------------------------------------------------------------
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
 
-    let f1_lock =
-        build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
+    // let f1_lock =
+    //     build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
     let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
-    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(&sk_keypair).0;
-    let f2_lock =
-        build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
+    // let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(&sk_keypair).0;
+    // let f2_lock =
+    //     build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
-    // P2TR wrapper for F1 output
-    let f1_taproot_tree = TaprootBuilder::new()
-        .add_leaf(0, f1_lock.clone())
-        .expect("valid leaf");
-    let f1_spend_info = f1_taproot_tree.finalize(&secp, x_only_pk).unwrap();
-    let f1_tr_addr = Address::p2tr_tweaked(f1_spend_info.output_key(), network);
-
-    // P2TR wrapper for F2 output
-    let f2_taproot_tree = TaprootBuilder::new()
-        .add_leaf(0, f2_lock.clone())
-        .expect("valid leaf");
-    let f2_spend_info = f2_taproot_tree.finalize(&secp, x_only_pk).unwrap();
-    let f2_tr_addr = Address::p2tr_tweaked(f2_spend_info.output_key(), network);
 
     fs::create_dir_all(OUTPUT_DIR)?;
 
-    // 4. Construct tx_f1  (funding → F1 output)
-    let tx_f1 = create_and_sign_tx_f1(
-        &secp,
-        &sk_keypair,
-        network,
-        funding_outpoint,
-        funding_value_sat,
-        f1_tr_addr.clone(),
-        args.fee_rate,
-    )?;
+    // 4. Construct tx_f1
 
-    let tx_f2 = create_and_sign_tx_f2(
+    let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
+         &secp,
+         &sk_keypair,
+         network,
+         funding_outpoint,
+         funding_value_sat,
+        &flow_id_prefix,
+         args.fee_rate,
+     )?;
+
+     let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         &secp,
         &sk_keypair,
         &tx_f1,
-        tx_f1.output[0].value.to_sat(), 
-        f2_tr_addr.clone(),
+        tx_f1.output[0].value.to_sat(),
         &f1_lock,
         &f1_spend_info,
+        network,
+        &flow_id_prefix,
         args.fee_rate,
         args.x,
         nonce,
@@ -430,9 +418,27 @@ fn create_and_sign_tx_f1(
     network: Network,
     funding_outpoint: OutPoint,
     funding_value_sat: u64,
-    f1_tr_addr: Address,
+    flow_id_prefix: &[u8],
     fee_rate: u64,
-) -> anyhow::Result<bitcoin::Transaction> {
+) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
+
+    // ── build F1 locking script ─────────────────────────────────────────
+    let pk_signer   = sk_keypair.public_key();
+    let lock = build_script_f1_blake3_locked(
+        &bitcoin::PublicKey::new(pk_signer),
+        flow_id_prefix,
+        B_PARAM,
+    );
+
+    // ── wrap in a Taproot tree & derive its address ─────────────────────
+    let x_only_pk   = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
+    let spend_info  = TaprootBuilder::new()
+        .add_leaf(0, lock.clone())
+        .expect("valid leaf")
+        .finalize(secp, x_only_pk).unwrap();
+
+    let tr_addr     = Address::p2tr_tweaked(spend_info.output_key(), network);
+
     let fee_f1 = estimate_fee_vbytes(155, fee_rate); // ~1 input + 1 output
     let f1_output_value = funding_value_sat
         .checked_sub(fee_f1)
@@ -449,7 +455,7 @@ fn create_and_sign_tx_f1(
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f1_output_value),
-            script_pubkey: f1_tr_addr.script_pubkey(),
+            script_pubkey: tr_addr.script_pubkey(),
         }],
     };
 
@@ -477,8 +483,7 @@ fn create_and_sign_tx_f1(
     sig_ser.push(EcdsaSighashType::All as u8);
     tx_f1.input[0].witness = Witness::from_slice(&[sig_ser, sk_keypair.public_key().serialize().to_vec()]);
 
-    // let f1_file_path = format!("{OUTPUT_DIR}/f1.tx");
-    Ok(tx_f1)
+    Ok((tx_f1, lock, spend_info))
 }
 
 /// Creates and signs tx_f2, spending the F1 output to the F2 Taproot address.
@@ -487,13 +492,29 @@ fn create_and_sign_tx_f2(
     sk_keypair: &Keypair,
     tx_f1: &bitcoin::Transaction,
     f1_output_value: u64,
-    f2_tr_addr: Address,
     f1_lock: &ScriptBuf,
     f1_spend_info: &TaprootSpendInfo,
+    network: Network,
+    flow_id_prefix: &[u8],
     fee_rate: u64,
     x_val: u32,
     nonce: u64,
-) -> anyhow::Result<bitcoin::Transaction> {
+) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
+
+     // ── build F2 locking script & Taproot branch ────────────────────────
+    let pk_signer   = sk_keypair.public_key();
+    let f2_lock = build_script_f2_blake3_locked(
+        &bitcoin::PublicKey::new(pk_signer),
+        flow_id_prefix,
+        B_PARAM,
+    );
+    let x_only_pk   = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
+    let spend_info  = TaprootBuilder::new()
+        .add_leaf(0, f2_lock.clone())
+        .expect("valid leaf")
+        .finalize(secp, x_only_pk).unwrap();
+    let tr_addr     = Address::p2tr_tweaked(spend_info.output_key(), network);
+
     // Now the tx vsize is about 17093.
     let fee_f2 = estimate_fee_vbytes(17093, fee_rate); // 1 input P2TR + 1 output
     let f2_output_value = f1_output_value
@@ -514,7 +535,7 @@ fn create_and_sign_tx_f2(
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f2_output_value),
-            script_pubkey: f2_tr_addr.script_pubkey(),
+            script_pubkey: tr_addr.script_pubkey(),
         }],
     };
 
@@ -560,7 +581,7 @@ fn create_and_sign_tx_f2(
     tx_f2.input[0].witness = witness;
 
     // let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
-    Ok(tx_f2)
+    Ok((tx_f2, f2_lock, spend_info))
 }
 
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.

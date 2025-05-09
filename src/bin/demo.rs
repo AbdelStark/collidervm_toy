@@ -271,7 +271,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
             );
         }).unwrap();
 
-        let confirmed_funding_tx = rpc_client.get_raw_transaction(&funding_tx, None).unwrap();
+        let confirmed_funding_tx = rpc_client.get_raw_transaction(&funding_tx, None)?;
         let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
         let vout = if *tx_out_sp_0 == signer_addr.script_pubkey() {
             0
@@ -312,18 +312,22 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
 
     let sk_keypair = secp256k1::Keypair::from_secret_key(&secp, &sk_signer);
     let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(&sk_keypair).0;
-    let _f2_lock =
+    let f2_lock =
         build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
     // P2TR wrapper for F1 output
-    let taproot_tree = TaprootBuilder::new()
+    let f1_taproot_tree = TaprootBuilder::new()
         .add_leaf(0, f1_lock.clone())
         .expect("valid leaf");
-    // Final Taproot output key
-    let spend_info = taproot_tree.finalize(&secp, x_only_pk).unwrap();
-    let output_key = spend_info.output_key();
-    let f1_tr_addr = Address::p2tr_tweaked(output_key, network);
+    let f1_spend_info = f1_taproot_tree.finalize(&secp, x_only_pk).unwrap();
+    let f1_tr_addr = Address::p2tr_tweaked(f1_spend_info.output_key(), network);
 
+    // P2TR wrapper for F2 output
+    let f2_taproot_tree = TaprootBuilder::new()
+        .add_leaf(0, f2_lock.clone())
+        .expect("valid leaf");
+    let f2_spend_info = f2_taproot_tree.finalize(&secp, x_only_pk).unwrap();
+    let f2_tr_addr = Address::p2tr_tweaked(f2_spend_info.output_key(), network);
     // --------------------------------------------------------------------
     // 4. Construct tx_f1  (funding → F1 output)
     // --------------------------------------------------------------------
@@ -384,8 +388,8 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // 5. Construct tx_f2  (spend F1 output → Operator)
     // --------------------------------------------------------------------
 
-    // Now the tx vsize is about 17088.
-    let fee_f2 = estimate_fee_vbytes(17088, args.fee_rate); // 1 input P2TR + 1 output
+    // Now the tx vsize is about 17093.
+    let fee_f2 = estimate_fee_vbytes(17093, args.fee_rate); // 1 input P2TR + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
@@ -404,7 +408,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
         }],
         output: vec![TxOut {
             value: Amount::from_sat(f2_output_value),
-            script_pubkey: operator_addr.script_pubkey(),
+            script_pubkey: f2_tr_addr.script_pubkey(),
         }],
     };
 
@@ -426,7 +430,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     let sig_f2_ser = sig.serialize().to_vec();
 
     // === Step 4: Assemble witness ===
-    let control_block = spend_info
+    let control_block = f1_spend_info
         .control_block(&(f1_lock.clone(), LeafVersion::TapScript))
         .unwrap();
 
@@ -466,20 +470,13 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // --------------------------------------------------------------------
     // 6. Construct spending tx  (spend F2 output → Receiver)
     // --------------------------------------------------------------------
-    let fee_spending_tx = estimate_fee_vbytes(111, args.fee_rate); // 1 input P2WPKH + 1 output
+    let fee_spending_tx = estimate_fee_vbytes(17082, args.fee_rate); // 1 input P2TR + 1 output
     let spending_output_value = f2_output_value
         .checked_sub(fee_spending_tx)
         .expect("f2 output too small for spending tx");
 
     let receiver = Address::from_str(&args.receiver)?.require_network(network)?;
-    // Sign the funding input (P2WPKH)
-    let operator_pkh = operator_addr
-        .witness_program()
-        .expect("addr")
-        .program() // 20 bytes = hash160(pubkey)
-        .to_owned();
-    let script_code =
-        ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_slice(operator_pkh.as_bytes())?);
+    // Sign the funding input (P2TR)
     let mut spending_tx = bitcoin::Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
@@ -498,26 +495,46 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
         }],
     };
 
-    let mut sighash_cache = SighashCache::new(&mut spending_tx);
-    let sighash = sighash_cache
-        .p2wsh_signature_hash(
+    // Build the witness stack for the P2TR spend
+    let leaf_hash = TapLeafHash::from_script(&f2_lock, LeafVersion::TapScript);
+
+    let mut cache = SighashCache::new(&mut spending_tx);
+    let sighash = cache
+        .taproot_script_spend_signature_hash(
             0,
-            &script_code,
-            Amount::from_sat(f2_output_value),
-            EcdsaSighashType::All,
+            &Prevouts::All(&[tx_f2.output[0].clone()]),
+            leaf_hash,
+            TapSighashType::Default,
         )
         .unwrap();
 
     let msg = Message::from_digest_slice(&sighash[..])?;
-    let sig = secp.sign_ecdsa(&msg, &sk_operator);
-    let mut sig_bytes = sig.serialize_der().to_vec();
-    sig_bytes.push(EcdsaSighashType::All.to_u32() as u8);
+    let sig = secp.sign_schnorr(&msg, &sk_keypair);
+    let sig_spending_ser = sig.serialize().to_vec();
 
-    // Witness stack = [<signature> <witness_script>]
-    spending_tx.input[0].witness = Witness::from(vec![
-        sig_bytes,
-        PublicKey::new(pk_operator).to_bytes().to_vec(),
-    ]);
+    // === Step 4: Assemble witness ===
+    let control_block = f2_spend_info
+        .control_block(&(f2_lock.clone(), LeafVersion::TapScript))
+        .unwrap();
+
+    // Encode input_value || nonce
+    let message = [
+        args.x.to_le_bytes(),
+        nonce.to_le_bytes()[0..4].try_into()?,
+        nonce.to_le_bytes()[4..8].try_into()?,
+    ]
+    .concat();
+
+    let mut witness = Witness::new();
+    for limb in blake3_message_to_limbs(&message, 4) {
+        witness.push(encode_scriptnum(limb.into()));
+    }
+
+    witness.push(sig_spending_ser.clone());
+    witness.push(f2_lock.to_bytes());
+    witness.push(control_block.serialize());
+
+    spending_tx.input[0].witness = witness;
 
     // Update transaction information for JSON output
     demo_output.transactions = Some(TransactionInfo {
@@ -549,25 +566,21 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
         println!("{json_output}");
     }
 
-    println!("f1 txid: {}", tx_f1.compute_txid());
-    println!("f2 txid: {}", tx_f2.compute_txid());
-
     if !args.dry_run {
-        println!("pushed f1, txid: {}", tx_f1.compute_txid());
+        println!("▶️  Pushed f1, txid: {}", tx_f1.compute_txid());
         let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
-
         wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
-        println!("f1 confirmed");
 
-        println!("pushed f2, txid: {}", tx_f2.compute_txid());
+        println!("▶️  Pushed f2, txid: {}", tx_f2.compute_txid());
         let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
         wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
-        println!("f2 confirmed");
 
-        println!("pushed spending tx, txid: {}", spending_tx.compute_txid());
+        println!(
+            "▶️  Pushed spending tx, txid: {}",
+            spending_tx.compute_txid()
+        );
         let spending_tx_txid = rpc_client.send_raw_transaction(&spending_tx)?;
         wait_for_confirmation(&rpc_client, &spending_tx_txid, 1, 60)?;
-        println!("spending tx confirmed");
     }
 
     Ok(())

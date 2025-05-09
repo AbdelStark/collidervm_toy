@@ -39,16 +39,16 @@ use bitcoin::{
 use bitcoin::{CompressedPublicKey, TapLeafHash, TapSighashType};
 use bitcoin::{EcdsaSighashType, hashes::Hash};
 use bitcoin::{
-    secp256k1::{Keypair, Message, Secp256k1, SecretKey},
+    secp256k1::{Keypair, Message, Secp256k1},
     sighash::SighashCache,
 };
-use bitcoincore_rpc::{Auth, Client, RawTx, RpcApi};
+use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{
     blake3_message_to_limbs, build_script_f1_blake3_locked, build_script_f2_blake3_locked,
     find_valid_nonce, flow_id_to_prefix_bytes,
 };
-use collidervm_toy::utils::{encode_scriptnum, estimate_fee_vbytes, sk_to_wif, wait_for_confirmation, wif_to_sk};
+use collidervm_toy::utils::{encode_scriptnum, estimate_fee_vbytes, wait_for_confirmation};
 use serde::Serialize;
 use std::{fs, str::FromStr};
 
@@ -314,22 +314,21 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // let f2_lock =
     //     build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
-
     fs::create_dir_all(OUTPUT_DIR)?;
 
     // 4. Construct tx_f1
 
     let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
-         &secp,
-         &sk_keypair,
-         network,
-         funding_outpoint,
-         funding_value_sat,
+        &secp,
+        &sk_keypair,
+        network,
+        funding_outpoint,
+        funding_value_sat,
         &flow_id_prefix,
-         args.fee_rate,
-     )?;
+        args.fee_rate,
+    )?;
 
-     let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
+    let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         &secp,
         &sk_keypair,
         &tx_f1,
@@ -421,23 +420,20 @@ fn create_and_sign_tx_f1(
     flow_id_prefix: &[u8],
     fee_rate: u64,
 ) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
-
     // ── build F1 locking script ─────────────────────────────────────────
-    let pk_signer   = sk_keypair.public_key();
-    let lock = build_script_f1_blake3_locked(
-        &bitcoin::PublicKey::new(pk_signer),
-        flow_id_prefix,
-        B_PARAM,
-    );
+    let pk_signer = sk_keypair.public_key();
+    let lock =
+        build_script_f1_blake3_locked(&bitcoin::PublicKey::new(pk_signer), flow_id_prefix, B_PARAM);
 
     // ── wrap in a Taproot tree & derive its address ─────────────────────
-    let x_only_pk   = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
-    let spend_info  = TaprootBuilder::new()
+    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
+    let spend_info = TaprootBuilder::new()
         .add_leaf(0, lock.clone())
         .expect("valid leaf")
-        .finalize(secp, x_only_pk).unwrap();
+        .finalize(secp, x_only_pk)
+        .unwrap();
 
-    let tr_addr     = Address::p2tr_tweaked(spend_info.output_key(), network);
+    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
 
     let fee_f1 = estimate_fee_vbytes(155, fee_rate); // ~1 input + 1 output
     let f1_output_value = funding_value_sat
@@ -478,10 +474,14 @@ fn create_and_sign_tx_f1(
         Amount::from_sat(funding_value_sat),
         EcdsaSighashType::All,
     )?;
-    let sig = secp.sign_ecdsa(&Message::from_digest_slice(&sighash[..])?, &sk_keypair.secret_key());
+    let sig = secp.sign_ecdsa(
+        &Message::from_digest_slice(&sighash[..])?,
+        &sk_keypair.secret_key(),
+    );
     let mut sig_ser = sig.serialize_der().to_vec();
     sig_ser.push(EcdsaSighashType::All as u8);
-    tx_f1.input[0].witness = Witness::from_slice(&[sig_ser, sk_keypair.public_key().serialize().to_vec()]);
+    tx_f1.input[0].witness =
+        Witness::from_slice(&[sig_ser, sk_keypair.public_key().serialize().to_vec()]);
 
     Ok((tx_f1, lock, spend_info))
 }
@@ -500,20 +500,17 @@ fn create_and_sign_tx_f2(
     x_val: u32,
     nonce: u64,
 ) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
-
-     // ── build F2 locking script & Taproot branch ────────────────────────
-    let pk_signer   = sk_keypair.public_key();
-    let f2_lock = build_script_f2_blake3_locked(
-        &bitcoin::PublicKey::new(pk_signer),
-        flow_id_prefix,
-        B_PARAM,
-    );
-    let x_only_pk   = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
-    let spend_info  = TaprootBuilder::new()
+    // ── build F2 locking script & Taproot branch ────────────────────────
+    let pk_signer = sk_keypair.public_key();
+    let f2_lock =
+        build_script_f2_blake3_locked(&bitcoin::PublicKey::new(pk_signer), flow_id_prefix, B_PARAM);
+    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
+    let spend_info = TaprootBuilder::new()
         .add_leaf(0, f2_lock.clone())
         .expect("valid leaf")
-        .finalize(secp, x_only_pk).unwrap();
-    let tr_addr     = Address::p2tr_tweaked(spend_info.output_key(), network);
+        .finalize(secp, x_only_pk)
+        .unwrap();
+    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
 
     // Now the tx vsize is about 17093.
     let fee_f2 = estimate_fee_vbytes(17093, fee_rate); // 1 input P2TR + 1 output
@@ -664,6 +661,3 @@ fn create_and_sign_spending_tx(
     let spending_tx_file_path = format!("{OUTPUT_DIR}/spending.tx"); // Optional, but consistent
     Ok((spending_tx, spending_tx_file_path))
 }
-
-
-

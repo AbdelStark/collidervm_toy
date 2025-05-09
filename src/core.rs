@@ -4,10 +4,13 @@ use bitcoin::{
     opcodes::{self, OP_TRUE},
 };
 use bitcoin_hashes::{HashEngine, sha256};
+pub use bitcoin_script::builder::StructuredScript as Script;
+pub use bitcoin_script::script;
 use bitcoin_script_stack::optimizer;
 use bitvm::hash::blake3::blake3_compute_script_with_limb;
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use secp256k1::{Keypair, Message, SecretKey, schnorr::Signature};
 use std::{
     collections::HashMap,
@@ -360,10 +363,11 @@ fn build_script_reconstruct_x() -> ScriptBuf {
 }
 
 /// Build an F1 script with onchain BLAKE3, checking x>F1_THRESHOLD and the top (b_bits/8) bytes match flow_id_prefix.
-pub fn build_script_f1_blake3_locked(
+pub fn build_script_f1_blake3_locked_with_mode(
     signer_pubkey: &PublicKey,
     flow_id_prefix: &[u8],
     _b_bits: usize,
+    test_mode: bool,
 ) -> ScriptBuf {
     let prefix_len = flow_id_prefix.len();
     let total_msg_len = 12; // x_4b + r_4b0 + r_4b1
@@ -372,7 +376,12 @@ pub fn build_script_f1_blake3_locked(
     // 1) Script to check signature
     let verify_signature_script = {
         let mut b = Builder::new();
-        b = b.push_key(signer_pubkey);
+        if test_mode {
+            // workaround an issue with sig verification implementation in script executor
+            b = b.push_key(signer_pubkey);
+        } else {
+            b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
+        }
         b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
     };
 
@@ -422,11 +431,20 @@ pub fn build_script_f1_blake3_locked(
     ])
 }
 
-/// Build an F2 script with onchain BLAKE3, checking x<F2_THRESHOLD and prefix
-pub fn build_script_f2_blake3_locked(
+pub fn build_script_f1_blake3_locked(
     signer_pubkey: &PublicKey,
     flow_id_prefix: &[u8],
     _b_bits: usize,
+) -> ScriptBuf {
+    build_script_f1_blake3_locked_with_mode(signer_pubkey, flow_id_prefix, _b_bits, false)
+}
+
+/// Build an F2 script with onchain BLAKE3, checking x<F2_THRESHOLD and prefix
+fn build_script_f2_blake3_locked_with_mode(
+    signer_pubkey: &PublicKey,
+    flow_id_prefix: &[u8],
+    _b_bits: usize,
+    test_mode: bool,
 ) -> ScriptBuf {
     let prefix_len = flow_id_prefix.len();
     let total_msg_len = 12;
@@ -435,7 +453,12 @@ pub fn build_script_f2_blake3_locked(
     // 1) Script to check signature
     let verify_signature_script = {
         let mut b = Builder::new();
-        b = b.push_key(signer_pubkey);
+        if test_mode {
+            // workaround an issue with sig verification implementation in script executor
+            b = b.push_key(signer_pubkey);
+        } else {
+            b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
+        }
         b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
     };
 
@@ -486,6 +509,14 @@ pub fn build_script_f2_blake3_locked(
     ])
 }
 
+pub fn build_script_f2_blake3_locked(
+    signer_pubkey: &PublicKey,
+    flow_id_prefix: &[u8],
+    _b_bits: usize,
+) -> ScriptBuf {
+    build_script_f2_blake3_locked_with_mode(signer_pubkey, flow_id_prefix, _b_bits, false)
+}
+
 /// A basic "hash rate" calibration
 pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
     println!("Calibrating for {duration_secs} seconds...");
@@ -517,6 +548,74 @@ pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
     let rate = if dt > 0.0 { count as f64 / dt } else { 0.0 };
     pb.finish_with_message(format!("~{rate:.2} H/s"));
     rate as u64
+}
+
+fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
+    let len = message_bytes.len();
+    let needed_padding_bytes = if len % 64 == 0 { 0 } else { 64 - (len % 64) };
+
+    message_bytes
+        .iter()
+        .copied()
+        .chain(std::iter::repeat_n(0u8, needed_padding_bytes))
+        .chunks(4) // reverse 4-byte chunks
+        .into_iter()
+        .flat_map(|chunk| chunk.collect::<Vec<u8>>().into_iter().rev())
+        .chunks(64) // collect 64-byte chunks
+        .into_iter()
+        .map(|mut chunk| std::array::from_fn(|_| chunk.next().unwrap()))
+        .collect()
+}
+
+fn pack_32_bytes_to_limbs(bytes: &[u8; 32], limb_len: u8) -> Vec<u32> {
+    let mut acc = 0u64;
+    let mut bits = 0usize;
+    let mask = (1u64 << limb_len) - 1;
+    let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1).div_ceil(limb_len as usize));
+
+    for &byte in bytes {
+        // big‑endian: shift current accumulator left
+        acc = (acc << 8) | byte as u64;
+        bits += 8;
+
+        while bits >= limb_len as usize {
+            let shift = bits - limb_len as usize;
+            limbs.push(((acc >> shift) & mask) as u32);
+            bits -= limb_len as usize;
+            acc &= (1u64 << bits) - 1; // clear the bits we just used
+        }
+    }
+    if bits > 0 {
+        limbs.push((acc << (limb_len as usize - bits)) as u32);
+    }
+    limbs
+}
+
+pub fn blake3_message_to_limbs(message_bytes: &[u8], limb_len: u8) -> Vec<u32> {
+    assert!(
+        message_bytes.len() <= 1024,
+        "This BLAKE3 implementation doesn't support messages longer than 1024 bytes"
+    );
+    assert!(
+        (4..32).contains(&limb_len),
+        "limb length must be in the range [4, 32)"
+    );
+
+    let chunks = chunk_message(message_bytes);
+    let mut limbs = Vec::new();
+
+    for chunk in chunks.into_iter() {
+        limbs.extend(pack_32_bytes_to_limbs(
+            &chunk[..32].try_into().unwrap(),
+            limb_len,
+        ));
+        limbs.extend(pack_32_bytes_to_limbs(
+            &chunk[32..].try_into().unwrap(),
+            limb_len,
+        ));
+    }
+
+    limbs
 }
 
 #[cfg(test)]
@@ -561,7 +660,8 @@ mod tests {
         let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
         let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
 
-        let script_f1 = build_script_f1_blake3_locked(&signer_pubkey, &flow_id_prefix, b);
+        let script_f1 =
+            build_script_f1_blake3_locked_with_mode(&signer_pubkey, &flow_id_prefix, b, true);
 
         let message = [
             input_value.to_le_bytes(),
@@ -569,7 +669,11 @@ mod tests {
             nonce.to_le_bytes()[4..8].try_into().unwrap(),
         ]
         .concat();
+
+        // A Script object that, when executed, leaves the packed limbs on stack
         let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
+
+        // let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
 
         // Create PushBytesBuf for all raw bytes for F1
         let sig_f1_buf =
@@ -584,7 +688,8 @@ mod tests {
         let sighash_f2 = create_dummy_sighash_message(&flow_id_prefix.clone());
         let sig_f2 = secp.sign_schnorr(&sighash_f2, &signer_keypair);
 
-        let script_f2 = build_script_f2_blake3_locked(&signer_pubkey, &flow_id_prefix, b);
+        let script_f2 =
+            build_script_f2_blake3_locked_with_mode(&signer_pubkey, &flow_id_prefix, b, true);
 
         let message = [
             input_value.to_le_bytes(),
@@ -637,6 +742,7 @@ mod tests {
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
         assert!(f1_res.success);
+        // assert!(false);
     }
 
     #[test]

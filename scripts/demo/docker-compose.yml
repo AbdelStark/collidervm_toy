@@ -1,0 +1,12 @@
+services:
+  bitcoind-regtest:
+    image: ruimarinho/bitcoin-core
+    container_name: bitcoind-regtest
+    restart: unless-stopped
+    volumes:
+      - ./bitcoin-data:/bitcoin
+      - ./bitcoin-init.sh:/usr/local/bin/bitcoin-init.sh
+    entrypoint: ["/bin/bash", "/usr/local/bin/bitcoin-init.sh"]
+    ports:
+      - "18443:18443"
+      - "18444:18444"

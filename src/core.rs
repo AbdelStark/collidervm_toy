@@ -71,7 +71,10 @@ pub struct PresignedFlow {
 }
 
 /// Create a minimal sighash for demonstration
-pub fn create_toy_sighash_message(locking_script: &ScriptBuf, value: Amount) -> Message {
+pub fn create_toy_sighash_message(
+    locking_script: &ScriptBuf,
+    value: Amount,
+) -> Message {
     let mut engine = sha256::HashEngine::default();
     engine.input(&locking_script.to_bytes());
     engine.input(&value.to_sat().to_le_bytes());
@@ -213,8 +216,8 @@ pub fn find_valid_nonce(
                     if hash_rates.len() > 10 {
                         hash_rates.remove(0);
                     }
-                    let avg_hash_rate: f64 =
-                        hash_rates.iter().sum::<f64>() / hash_rates.len() as f64;
+                    let avg_hash_rate: f64 = hash_rates.iter().sum::<f64>()
+                        / hash_rates.len() as f64;
 
                     // Update progress bar with current rate and ETA
                     if let Some(pb) = &progress_bar {
@@ -230,7 +233,11 @@ pub fn find_valid_nonce(
                         let eta_str = if eta_secs < 60.0 {
                             format!("{eta_secs:.1}s")
                         } else if eta_secs < 3600.0 {
-                            format!("{:.1}m {:.0}s", eta_secs / 60.0, eta_secs % 60.0)
+                            format!(
+                                "{:.1}m {:.0}s",
+                                eta_secs / 60.0,
+                                eta_secs % 60.0
+                            )
                         } else {
                             format!(
                                 "{:.1}h {:.0}m",
@@ -245,7 +252,9 @@ pub fn find_valid_nonce(
                             (nonce as f64 / expected_attempts as f64) * 100.0
                         ));
                     } else {
-                        println!("  Tried {nonce} hashes... ({avg_hash_rate:.2} hash/s)");
+                        println!(
+                            "  Tried {nonce} hashes... ({avg_hash_rate:.2} hash/s)"
+                        );
                     }
 
                     last_update = nonce;
@@ -268,9 +277,9 @@ pub fn find_valid_nonce(
                 }
 
                 // Increment nonce, checking for overflow
-                nonce = nonce
-                    .checked_add(1)
-                    .ok_or_else(|| "Nonce overflowed u64::MAX while searching".to_string())?;
+                nonce = nonce.checked_add(1).ok_or_else(|| {
+                    "Nonce overflowed u64::MAX while searching".to_string()
+                })?;
 
                 // Safety break after excessive attempts (e.g., 100x expected work)
                 // This prevents infinite loops in case of configuration errors.
@@ -396,9 +405,11 @@ pub fn build_script_f1_blake3_locked_with_mode(
         .into_script();
 
     // 4) BLAKE3 compute snippet - OPTIMIZED
-    let compute_compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
+    let compute_compiled =
+        blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
     let compute_optimized = optimizer::optimize(compute_compiled);
-    let compute_blake3_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
+    let compute_blake3_script =
+        ScriptBuf::from_bytes(compute_optimized.to_bytes());
 
     // 5) drop limbs we don't need for prefix check
     // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
@@ -436,7 +447,12 @@ pub fn build_script_f1_blake3_locked(
     flow_id_prefix: &[u8],
     _b_bits: usize,
 ) -> ScriptBuf {
-    build_script_f1_blake3_locked_with_mode(signer_pubkey, flow_id_prefix, _b_bits, false)
+    build_script_f1_blake3_locked_with_mode(
+        signer_pubkey,
+        flow_id_prefix,
+        _b_bits,
+        false,
+    )
 }
 
 /// Build an F2 script with onchain BLAKE3, checking x<F2_THRESHOLD and prefix
@@ -474,7 +490,8 @@ fn build_script_f2_blake3_locked_with_mode(
 
     // 4) BLAKE3 compute snippet - OPTIMIZED
     let compute_blake3_script = {
-        let compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
+        let compiled =
+            blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
         // Important: Optimize the compute script
         let optimized = optimizer::optimize(compiled);
         ScriptBuf::from_bytes(optimized.to_bytes())
@@ -514,7 +531,12 @@ pub fn build_script_f2_blake3_locked(
     flow_id_prefix: &[u8],
     _b_bits: usize,
 ) -> ScriptBuf {
-    build_script_f2_blake3_locked_with_mode(signer_pubkey, flow_id_prefix, _b_bits, false)
+    build_script_f2_blake3_locked_with_mode(
+        signer_pubkey,
+        flow_id_prefix,
+        _b_bits,
+        false,
+    )
 }
 
 /// A basic "hash rate" calibration
@@ -571,7 +593,9 @@ fn pack_32_bytes_to_limbs(bytes: &[u8; 32], limb_len: u8) -> Vec<u32> {
     let mut acc = 0u64;
     let mut bits = 0usize;
     let mask = (1u64 << limb_len) - 1;
-    let mut limbs = Vec::with_capacity((256 + limb_len as usize - 1).div_ceil(limb_len as usize));
+    let mut limbs = Vec::with_capacity(
+        (256 + limb_len as usize - 1).div_ceil(limb_len as usize),
+    );
 
     for &byte in bytes {
         // big‑endian: shift current accumulator left
@@ -625,7 +649,9 @@ mod tests {
     use bitcoin_script::script;
     use bitvm::{
         execute_script_buf,
-        hash::blake3::{blake3_push_message_script_with_limb, blake3_verify_output_script},
+        hash::blake3::{
+            blake3_push_message_script_with_limb, blake3_verify_output_script,
+        },
     };
     use secp256k1::Secp256k1;
 
@@ -648,20 +674,29 @@ mod tests {
         pub sig_script_f2: ScriptBuf,
     }
 
-    pub fn create_test_case(b: usize, l: usize, input_value: u32) -> ColliderVmTestCase {
+    pub fn create_test_case(
+        b: usize,
+        l: usize,
+        input_value: u32,
+    ) -> ColliderVmTestCase {
         let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
         let (sk, pk) = secp.generate_keypair(&mut rand::thread_rng());
         let signer_keypair = Keypair::from_secret_key(&secp, &sk);
         let signer_pubkey = PublicKey::new(pk);
 
-        let (nonce, flow_id, _hash) = find_valid_nonce(input_value, b, l).unwrap();
+        let (nonce, flow_id, _hash) =
+            find_valid_nonce(input_value, b, l).unwrap();
         let flow_id_prefix: Vec<u8> = flow_id_to_prefix_bytes(flow_id, b);
 
         let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
         let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
 
-        let script_f1 =
-            build_script_f1_blake3_locked_with_mode(&signer_pubkey, &flow_id_prefix, b, true);
+        let script_f1 = build_script_f1_blake3_locked_with_mode(
+            &signer_pubkey,
+            &flow_id_prefix,
+            b,
+            true,
+        );
 
         let message = [
             input_value.to_le_bytes(),
@@ -671,13 +706,14 @@ mod tests {
         .concat();
 
         // A Script object that, when executed, leaves the packed limbs on stack
-        let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
+        let msg_push_script_f1 =
+            blake3_push_message_script_with_limb(&message, 4).compile();
 
         // let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
 
         // Create PushBytesBuf for all raw bytes for F1
-        let sig_f1_buf =
-            PushBytesBuf::try_from(sig_f1.as_ref().to_vec()).expect("sig_f1 conversion failed");
+        let sig_f1_buf = PushBytesBuf::try_from(sig_f1.as_ref().to_vec())
+            .expect("sig_f1 conversion failed");
 
         let sig_script_f1 = {
             let mut b = Builder::new();
@@ -688,8 +724,12 @@ mod tests {
         let sighash_f2 = create_dummy_sighash_message(&flow_id_prefix.clone());
         let sig_f2 = secp.sign_schnorr(&sighash_f2, &signer_keypair);
 
-        let script_f2 =
-            build_script_f2_blake3_locked_with_mode(&signer_pubkey, &flow_id_prefix, b, true);
+        let script_f2 = build_script_f2_blake3_locked_with_mode(
+            &signer_pubkey,
+            &flow_id_prefix,
+            b,
+            true,
+        );
 
         let message = [
             input_value.to_le_bytes(),
@@ -697,11 +737,12 @@ mod tests {
             nonce.to_le_bytes()[4..8].try_into().unwrap(),
         ]
         .concat();
-        let msg_push_script_f2 = blake3_push_message_script_with_limb(&message, 4).compile();
+        let msg_push_script_f2 =
+            blake3_push_message_script_with_limb(&message, 4).compile();
 
         // Create PushBytesBuf for all raw bytes for F2
-        let sig_f2_buf =
-            PushBytesBuf::try_from(sig_f2.as_ref().to_vec()).expect("sig_f2 conversion failed");
+        let sig_f2_buf = PushBytesBuf::try_from(sig_f2.as_ref().to_vec())
+            .expect("sig_f2 conversion failed");
 
         let sig_script_f2 = {
             let mut b = Builder::new();
@@ -765,7 +806,9 @@ mod tests {
     fn test_f1_witness_script() {
         // Create an input value that will fill the 4 bytes
         let input_value = u32::from_be_bytes([0x12, 0x34, 0x56, 0x78]);
-        let nonce = u64::from_be_bytes([0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x21, 0x43]);
+        let nonce = u64::from_be_bytes([
+            0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x21, 0x43,
+        ]);
         let limb_len: u8 = 4;
 
         let message = [
@@ -777,10 +820,12 @@ mod tests {
         println!("input_value: {input_value}");
         println!("nonce: {nonce}");
         println!("message: {}", hex::encode(message.clone()));
-        let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, limb_len).compile();
+        let msg_push_script_f1 =
+            blake3_push_message_script_with_limb(&message, limb_len).compile();
         //println!("msg_push_script_f1: {}", msg_push_script_f1);
 
-        let witness_script = ScriptBuf::from_bytes(msg_push_script_f1.to_bytes());
+        let witness_script =
+            ScriptBuf::from_bytes(msg_push_script_f1.to_bytes());
         let f1_res = execute_script_buf(witness_script);
         println!("F1 => success={}", f1_res.success);
         println!("F1 => exec_stats={:?}", f1_res.stats);
@@ -831,13 +876,15 @@ mod tests {
         println!("Expected hash: {}", hex::encode(expected_hash));
 
         // Test push message script generation (requires message argument)
-        let push_bytes = blake3_push_message_script_with_limb(&message, limb_len)
-            .compile()
-            .to_bytes();
+        let push_bytes =
+            blake3_push_message_script_with_limb(&message, limb_len)
+                .compile()
+                .to_bytes();
 
         // Test compute script generation
-        let optimized_compute =
-            optimizer::optimize(blake3_compute_script_with_limb(message.len(), limb_len).compile());
+        let optimized_compute = optimizer::optimize(
+            blake3_compute_script_with_limb(message.len(), limb_len).compile(),
+        );
 
         // Test verify output script generation
         let verify_bytes = blake3_verify_output_script(expected_hash)
@@ -861,13 +908,15 @@ mod tests {
         invalid_hash[0] ^= 0x01; // Change one byte to create an invalid hash
 
         // Test push message script generation (requires message argument)
-        let push_bytes = blake3_push_message_script_with_limb(&message, limb_len)
-            .compile()
-            .to_bytes();
+        let push_bytes =
+            blake3_push_message_script_with_limb(&message, limb_len)
+                .compile()
+                .to_bytes();
 
         // Test compute script generation
-        let optimized_compute =
-            optimizer::optimize(blake3_compute_script_with_limb(message.len(), limb_len).compile());
+        let optimized_compute = optimizer::optimize(
+            blake3_compute_script_with_limb(message.len(), limb_len).compile(),
+        );
 
         // Test verify output script generation
         let verify_bytes = blake3_verify_output_script(invalid_hash)
@@ -903,7 +952,8 @@ mod tests {
         let flow_id_prefix = vec![0x00, 0x0d, 0x00, 0x00];
         let script_part_1 = build_prefix_equalverify(&flow_id_prefix);
 
-        let locking_script = combine_scripts(&[script_part_1, script! {OP_TRUE}.compile()]);
+        let locking_script =
+            combine_scripts(&[script_part_1, script! {OP_TRUE}.compile()]);
 
         let mut full_f1 = x_sig_script.to_bytes();
         full_f1.extend(locking_script.to_bytes());
@@ -922,16 +972,20 @@ mod tests {
     #[test]
     fn test_blake3_input_from_witness() {
         let message = [
-            0x7b, 0x00, 0x00, 0x00, 0xd9, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x7b, 0x00, 0x00, 0x00, 0xd9, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00,
         ];
-        let msg_push_script = blake3_push_message_script_with_limb(&message, 4).compile();
+        let msg_push_script =
+            blake3_push_message_script_with_limb(&message, 4).compile();
         let push_script = ScriptBuf::from_bytes(msg_push_script.to_bytes());
 
         let total_msg_len = 12;
         let limb_len = 4;
-        let compute_compiled = blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
+        let compute_compiled =
+            blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
         let compute_optimized = optimizer::optimize(compute_compiled);
-        let compute_script = ScriptBuf::from_bytes(compute_optimized.to_bytes());
+        let compute_script =
+            ScriptBuf::from_bytes(compute_optimized.to_bytes());
 
         let expected_hash = *blake3::hash(message.as_ref()).as_bytes();
         let verify_script = ScriptBuf::from_bytes(

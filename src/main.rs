@@ -30,28 +30,17 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use bitcoin::sighash::Prevouts;
-use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
-use bitcoin::{
-    Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, TxIn,
-    TxOut, Txid, Witness, absolute,
-};
-use bitcoin::{CompressedPublicKey, TapLeafHash, TapSighashType};
-use bitcoin::{EcdsaSighashType, hashes::Hash};
-use bitcoin::{
-    secp256k1::{Keypair, Message, Secp256k1},
-    sighash::SighashCache,
-};
+use bitcoin::CompressedPublicKey;
+use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{Keypair, Secp256k1};
+use bitcoin::{Address, Amount, Network, OutPoint, Txid};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
-use collidervm_toy::core::{
-    blake3_message_to_limbs, build_script_f1_blake3_locked,
-    build_script_f2_blake3_locked, find_valid_nonce, flow_id_to_prefix_bytes,
+use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
+use collidervm_toy::transactions::{
+    create_and_sign_spending_tx, create_and_sign_tx_f1, create_and_sign_tx_f2,
 };
-use collidervm_toy::utils::{
-    encode_scriptnum, estimate_fee_vbytes, wait_for_confirmation,
-};
-use serde::Serialize;
+use collidervm_toy::utils::wait_for_confirmation;
 use std::{fs, str::FromStr};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
@@ -109,52 +98,52 @@ struct Args {
     wallet_passphrase: String,
 }
 
-/// Structure for serializing key details to JSON
-#[derive(Serialize)]
-struct KeyInfo {
-    pub signer: KeyPair,
-    pub operator: KeyPair,
-}
+// /// Structure for serializing key details to JSON
+// #[derive(Serialize)]
+// struct KeyInfo {
+//     pub signer: KeyPair,
+//     pub operator: KeyPair,
+// }
 
-/// Structure for serializing individual key pairs to JSON
-#[derive(Serialize)]
-struct KeyPair {
-    pub address: String,
-    pub wif: String,
-}
+// /// Structure for serializing individual key pairs to JSON
+// #[derive(Serialize)]
+// struct KeyPair {
+//     pub address: String,
+//     pub wif: String,
+// }
 
-/// Structure for serializing transaction details to JSON
-#[derive(Serialize)]
-struct TransactionInfo {
-    f1: TxInfo,
-    f2: TxInfo,
-    nonce: u64,
-    flow_id: u32,
-}
+// /// Structure for serializing transaction details to JSON
+// #[derive(Serialize)]
+// struct TransactionInfo {
+//     f1: TxInfo,
+//     f2: TxInfo,
+//     nonce: u64,
+//     flow_id: u32,
+// }
 
-/// Structure for serializing individual transaction information
-#[derive(Serialize)]
-struct TxInfo {
-    txid: String,
-    file_path: String,
-}
+// /// Structure for serializing individual transaction information
+// #[derive(Serialize)]
+// struct TxInfo {
+//     txid: String,
+//     file_path: String,
+// }
 
-/// Complete demo output for JSON serialization
-#[derive(Serialize)]
-struct DemoOutput {
-    pub keys: KeyInfo,
-    transactions: Option<TransactionInfo>,
-    input_x: u32,
-    parameters: DemoParameters,
-}
+// /// Complete demo output for JSON serialization
+// #[derive(Serialize)]
+// struct DemoOutput {
+//     pub keys: KeyInfo,
+//     transactions: Option<TransactionInfo>,
+//     input_x: u32,
+//     parameters: DemoParameters,
+// }
 
-/// Parameters used in the demo for JSON serialization
-#[derive(Serialize)]
-struct DemoParameters {
-    required_amount_sat: u64,
-    l_param: usize,
-    b_param: usize,
-}
+// /// Parameters used in the demo for JSON serialization
+// #[derive(Serialize)]
+// struct DemoParameters {
+//     required_amount_sat: u64,
+//     l_param: usize,
+//     b_param: usize,
+// }
 
 fn wrap_network(network: &str) -> Network {
     match network {
@@ -181,16 +170,16 @@ fn main() -> anyhow::Result<()> {
     let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
 
     let (sk_signer, pk_signer) = secp.generate_keypair(&mut rand::thread_rng());
-    let (sk_operator, pk_operator) =
-        secp.generate_keypair(&mut rand::thread_rng());
+    // let (sk_operator, pk_operator) =
+    //     secp.generate_keypair(&mut rand::thread_rng());
 
     let signer_compressed_pk =
         CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
     let signer_addr = Address::p2wpkh(&signer_compressed_pk, network);
 
-    let operator_compressed_pk =
-        CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
-    let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
+    // let operator_compressed_pk =
+    //     CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
+    // let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
 
     let (funding_txid, funding_vout) = if args.dry_run {
         // In dry run mode, use a placeholder txid
@@ -256,6 +245,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     fs::create_dir_all(OUTPUT_DIR)?;
 
     let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
+        B_PARAM,
         &secp,
         &sk_keypair,
         network,
@@ -266,6 +256,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     )?;
 
     let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
+        B_PARAM,
         &secp,
         &sk_keypair,
         network,
@@ -281,7 +272,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
 
     let receiver_addr =
         Address::from_str(&args.receiver)?.require_network(network)?;
-    let (spending_tx, _) = create_and_sign_spending_tx(
+    let spending_tx = create_and_sign_spending_tx(
         &secp,
         &sk_keypair,
         &tx_f2,
@@ -312,271 +303,4 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     }
 
     Ok(())
-}
-
-// --------------------------------------------------------------------
-// Transaction Creation Functions
-// --------------------------------------------------------------------
-
-/// Creates and signs tx_f1, spending the funding UTXO to the F1 Taproot address.
-fn create_and_sign_tx_f1(
-    secp: &Secp256k1<secp256k1::All>,
-    sk_keypair: &Keypair,
-    network: Network,
-    funding_outpoint: OutPoint,
-    funding_value_sat: u64,
-    flow_id_prefix: &[u8],
-    fee_rate: u64,
-) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
-    // ── build F1 locking script ─────────────────────────────────────────
-    let pk_signer = sk_keypair.public_key();
-    let lock = build_script_f1_blake3_locked(
-        &bitcoin::PublicKey::new(pk_signer),
-        flow_id_prefix,
-        B_PARAM,
-    );
-
-    // ── wrap in a Taproot tree & derive its address ─────────────────────
-    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
-    let spend_info = TaprootBuilder::new()
-        .add_leaf(0, lock.clone())
-        .expect("valid leaf")
-        .finalize(secp, x_only_pk)
-        .unwrap();
-
-    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
-
-    let fee_f1 = estimate_fee_vbytes(155, fee_rate); // ~1 input + 1 output
-    let f1_output_value = funding_value_sat
-        .checked_sub(fee_f1)
-        .expect("funding not sufficient for fee");
-
-    let mut tx_f1 = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: funding_outpoint,
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(f1_output_value),
-            script_pubkey: tr_addr.script_pubkey(),
-        }],
-    };
-
-    // Sign the funding input (P2WPKH)
-    let signer_addr = Address::p2wpkh(
-        &CompressedPublicKey::try_from(bitcoin::PublicKey::new(
-            sk_keypair.public_key(),
-        ))?,
-        network,
-    );
-    let signer_pkh = signer_addr
-        .witness_program()
-        .expect("addr")
-        .program() // 20 bytes = hash160(pubkey)
-        .to_owned();
-    let script_code = ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_slice(
-        signer_pkh.as_bytes(),
-    )?);
-    let mut sighash_cache = SighashCache::new(&mut tx_f1);
-    let sighash = sighash_cache.p2wsh_signature_hash(
-        0,
-        &script_code,
-        Amount::from_sat(funding_value_sat),
-        EcdsaSighashType::All,
-    )?;
-    let sig = secp.sign_ecdsa(
-        &Message::from_digest_slice(&sighash[..])?,
-        &sk_keypair.secret_key(),
-    );
-    let mut sig_ser = sig.serialize_der().to_vec();
-    sig_ser.push(EcdsaSighashType::All as u8);
-    tx_f1.input[0].witness = Witness::from_slice(&[
-        sig_ser,
-        sk_keypair.public_key().serialize().to_vec(),
-    ]);
-
-    Ok((tx_f1, lock, spend_info))
-}
-
-/// Creates and signs tx_f2, spending the F1 output to the F2 Taproot address.
-fn create_and_sign_tx_f2(
-    secp: &Secp256k1<secp256k1::All>,
-    sk_keypair: &Keypair,
-    network: Network,
-    tx_f1: &bitcoin::Transaction,
-    f1_output_value: u64,
-    f1_lock: &ScriptBuf,
-    f1_spend_info: &TaprootSpendInfo,
-    flow_id_prefix: &[u8],
-    fee_rate: u64,
-    x: u32,
-    nonce: u64,
-) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
-    // ── build F2 locking script & Taproot branch ────────────────────────
-    let pk_signer = sk_keypair.public_key();
-    let f2_lock = build_script_f2_blake3_locked(
-        &bitcoin::PublicKey::new(pk_signer),
-        flow_id_prefix,
-        B_PARAM,
-    );
-    let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
-    let spend_info = TaprootBuilder::new()
-        .add_leaf(0, f2_lock.clone())
-        .expect("valid leaf")
-        .finalize(secp, x_only_pk)
-        .unwrap();
-    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
-
-    // Now the tx vsize is about 17093.
-    let fee_f2 = estimate_fee_vbytes(17093, fee_rate); // 1 input P2TR + 1 output
-    let f2_output_value = f1_output_value
-        .checked_sub(fee_f2)
-        .expect("f1 output too small for f2 fee");
-
-    let mut tx_f2 = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: tx_f1.compute_txid(),
-                vout: 0,
-            },
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(f2_output_value),
-            script_pubkey: tr_addr.script_pubkey(),
-        }],
-    };
-
-    // Build the witness stack for the P2TR spend
-    let leaf_hash = TapLeafHash::from_script(f1_lock, LeafVersion::TapScript);
-
-    let mut cache = SighashCache::new(&mut tx_f2);
-    let sighash = cache
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[tx_f1.output[0].clone()]),
-            leaf_hash,
-            TapSighashType::Default,
-        )
-        .unwrap();
-
-    let msg = Message::from_digest_slice(&sighash[..])?;
-    let sig = secp.sign_schnorr(&msg, sk_keypair);
-    let sig_f2_ser = sig.serialize().to_vec();
-
-    // Assemble witness
-    let control_block = f1_spend_info
-        .control_block(&(f1_lock.clone(), LeafVersion::TapScript))
-        .unwrap();
-
-    // Encode input_value || nonce
-    let message = [
-        x.to_le_bytes(),
-        nonce.to_le_bytes()[0..4].try_into()?,
-        nonce.to_le_bytes()[4..8].try_into()?,
-    ]
-    .concat();
-
-    let mut witness = Witness::new();
-    for limb in blake3_message_to_limbs(&message, 4) {
-        witness.push(encode_scriptnum(limb.into()));
-    }
-
-    witness.push(sig_f2_ser);
-    witness.push(f1_lock.to_bytes());
-    witness.push(control_block.serialize());
-
-    tx_f2.input[0].witness = witness;
-
-    // let f2_file_path = format!("{OUTPUT_DIR}/f2.tx");
-    Ok((tx_f2, f2_lock, spend_info))
-}
-
-/// Creates and signs the spending transaction, spending the F2 output to the receiver.
-fn create_and_sign_spending_tx(
-    secp: &Secp256k1<secp256k1::All>,
-    sk_keypair: &Keypair,
-    tx_f2: &bitcoin::Transaction,
-    f2_output_value: u64,
-    receiver_addr: Address,
-    f2_lock: &ScriptBuf,
-    f2_spend_info: &TaprootSpendInfo,
-    fee_rate: u64,
-    x: u32,
-    nonce: u64,
-) -> anyhow::Result<(bitcoin::Transaction, String)> {
-    let fee_spending_tx = estimate_fee_vbytes(17082, fee_rate); // 1 input P2TR + 1 output
-    let spending_output_value = f2_output_value
-        .checked_sub(fee_spending_tx)
-        .expect("f2 output too small for spending tx");
-
-    let mut spending_tx = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: tx_f2.compute_txid(),
-                vout: 0,
-            },
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(spending_output_value),
-            script_pubkey: receiver_addr.script_pubkey(),
-        }],
-    };
-
-    // Build the witness stack for the P2TR spend
-    let leaf_hash = TapLeafHash::from_script(f2_lock, LeafVersion::TapScript);
-
-    let mut cache = SighashCache::new(&mut spending_tx);
-    let sighash = cache
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[tx_f2.output[0].clone()]),
-            leaf_hash,
-            TapSighashType::Default,
-        )
-        .unwrap();
-
-    let msg = Message::from_digest_slice(&sighash[..])?;
-    let sig = secp.sign_schnorr(&msg, sk_keypair);
-    let sig_spending_ser = sig.serialize().to_vec();
-
-    // Assemble witness
-    let control_block = f2_spend_info
-        .control_block(&(f2_lock.clone(), LeafVersion::TapScript))
-        .unwrap();
-
-    // Encode input_value || nonce
-    let message = [
-        x.to_le_bytes(),
-        nonce.to_le_bytes()[0..4].try_into()?,
-        nonce.to_le_bytes()[4..8].try_into()?,
-    ]
-    .concat();
-
-    let mut witness = Witness::new();
-    for limb in blake3_message_to_limbs(&message, 4) {
-        witness.push(encode_scriptnum(limb.into()));
-    }
-
-    witness.push(sig_spending_ser);
-    witness.push(f2_lock.to_bytes());
-    witness.push(control_block.serialize());
-
-    spending_tx.input[0].witness = witness;
-
-    let spending_tx_file_path = format!("{OUTPUT_DIR}/spending.tx"); // Optional, but consistent
-    Ok((spending_tx, spending_tx_file_path))
 }

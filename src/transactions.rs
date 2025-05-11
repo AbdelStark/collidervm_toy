@@ -22,6 +22,7 @@ use crate::utils::{encode_scriptnum, estimate_fee_vbytes};
 // --------------------------------------------------------------------
 
 /// Creates and signs tx_f1, spending the funding UTXO to the F1 Taproot address.
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_tx_f1(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
@@ -107,6 +108,7 @@ pub fn create_and_sign_tx_f1(
 }
 
 /// Creates and signs tx_f2, spending the F1 output to the F2 Taproot address.
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_tx_f2(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
@@ -205,6 +207,7 @@ pub fn create_and_sign_tx_f2(
 }
 
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_spending_tx(
     secp: &Secp256k1<secp256k1::All>,
     sk_keypair: &Keypair,

@@ -40,6 +40,16 @@ pub fn wif_to_sk(wif: &str) -> SecretKey {
         .inner
 }
 
+/// Serialize a Schnorr signature to Vec<u8>
+pub fn serialize_schnorr_sig(sig: &secp256k1::schnorr::Signature) -> Vec<u8> {
+    sig.serialize().to_vec()
+}
+
+use bitcoin::secp256k1::{Keypair, Message, Secp256k1};
+use bitcoin::sighash::{Prevouts, SighashCache};
+use bitcoin::taproot::{LeafVersion, TapLeafHash};
+use bitcoin::{ScriptBuf, TapSighashType, Transaction};
+
 pub fn wait_for_confirmation(
     rpc_client: &Client,
     txid: &Txid,
@@ -57,7 +67,9 @@ pub fn wait_for_confirmation(
                         break;
                     }
                 } else {
-                    println!("⏳ Transaction in mempool, no confirmations yet.");
+                    println!(
+                        "⏳ Transaction in mempool, no confirmations yet."
+                    );
                 }
             }
             Err(e) => {

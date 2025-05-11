@@ -33,8 +33,8 @@
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
 use bitcoin::{
-    Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness,
-    absolute,
+    Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, TxIn,
+    TxOut, Txid, Witness, absolute,
 };
 use bitcoin::{CompressedPublicKey, TapLeafHash, TapSighashType};
 use bitcoin::{EcdsaSighashType, hashes::Hash};
@@ -45,10 +45,12 @@ use bitcoin::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{
-    blake3_message_to_limbs, build_script_f1_blake3_locked, build_script_f2_blake3_locked,
-    find_valid_nonce, flow_id_to_prefix_bytes,
+    blake3_message_to_limbs, build_script_f1_blake3_locked,
+    build_script_f2_blake3_locked, find_valid_nonce, flow_id_to_prefix_bytes,
 };
-use collidervm_toy::utils::{encode_scriptnum, estimate_fee_vbytes, wait_for_confirmation};
+use collidervm_toy::utils::{
+    encode_scriptnum, estimate_fee_vbytes, wait_for_confirmation,
+};
 use serde::Serialize;
 use std::{fs, str::FromStr};
 
@@ -176,78 +178,20 @@ fn main() -> anyhow::Result<()> {
 
     let network = wrap_network(args.network.as_str());
 
-    // 0. Generate Signer & Operator keys (for demo we use 1‑of‑1)
     let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
 
     let (sk_signer, pk_signer) = secp.generate_keypair(&mut rand::thread_rng());
-    let (sk_operator, pk_operator) = secp.generate_keypair(&mut rand::thread_rng());
+    let (sk_operator, pk_operator) =
+        secp.generate_keypair(&mut rand::thread_rng());
 
-    let signer_compressed_pk = CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
+    let signer_compressed_pk =
+        CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
     let signer_addr = Address::p2wpkh(&signer_compressed_pk, network);
 
-    let operator_compressed_pk = CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
+    let operator_compressed_pk =
+        CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
     let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
 
-    // // Prepare key information for output
-    // let key_info = KeyInfo {
-    //     signer: KeyPair {
-    //         address: signer_addr.to_string(),
-    //         wif: sk_to_wif(&sk_signer, network),
-    //     },
-    //     operator: KeyPair {
-    //         address: operator_addr.to_string(),
-    //         wif: sk_to_wif(&sk_operator, network),
-    //     },
-    // };
-
-    // // For debug
-    // let sk_expected = wif_to_sk(&key_info.signer.wif);
-    // assert_eq!(sk_expected, sk_signer);
-
-    // // Prepare demo output structure for JSON output
-    // let mut demo_output = DemoOutput {
-    //     keys: key_info,
-    //     transactions: None,
-    //     input_x: args.x,
-    //     parameters: DemoParameters {
-    //         required_amount_sat: REQUIRED_AMOUNT_SAT,
-    //         l_param: L_PARAM,
-    //         b_param: B_PARAM,
-    //     },
-    // };
-
-    // // If dry-run mode, print key information in formatted text
-    // if args.dry_run {
-    //     println!(
-    //         "{}\n  Signer  → {} (WIF {})\n  Operator→ {} (WIF {})\n{}",
-    //         "Generated demo keys:".bold().blue(),
-    //         signer_addr,
-    //         sk_to_wif(&sk_signer, network),
-    //         operator_addr,
-    //         sk_to_wif(&sk_operator, network),
-    //         "---------------------------------------------".dimmed()
-    //     );
-    // }
-
-    // Output JSON without transaction info
-    // let json_output = serde_json::to_string_pretty(&demo_output)?;
-
-    // If a JSON output file is specified, write to it
-    // if let Some(file_path) = &args.json_output_file {
-    //     fs::create_dir_all(
-    //         std::path::Path::new(file_path)
-    //             .parent()
-    //             .unwrap_or(std::path::Path::new("./")),
-    //     )?;
-    //     fs::write(file_path, &json_output)?;
-    // } else {
-    //     // Otherwise print to stdout
-    //     println!("{json_output}");
-    // }
-
-    // --------------------------------------------------------------------
-    // 1. Parse CLI funding UTXO
-    // --------------------------------------------------------------------
     let (funding_txid, funding_vout) = if args.dry_run {
         // In dry run mode, use a placeholder txid
         (Txid::all_zeros(), 0)
@@ -270,7 +214,8 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
             );
         }).unwrap();
 
-        let confirmed_funding_tx = rpc_client.get_raw_transaction(&funding_tx, None)?;
+        let confirmed_funding_tx =
+            rpc_client.get_raw_transaction(&funding_tx, None)?;
         let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
         let vout = if *tx_out_sp_0 == signer_addr.script_pubkey() {
             0
@@ -294,8 +239,8 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // --------------------------------------------------------------------
     // 2. Find nonce r & flow‑id d  (operator work)
     // --------------------------------------------------------------------
-    let (nonce, flow_id, _hash) =
-        find_valid_nonce(args.x, B_PARAM, L_PARAM).expect("nonce search should succeed quickly");
+    let (nonce, flow_id, _hash) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
+        .expect("nonce search should succeed quickly");
 
     println!(
         "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
@@ -306,17 +251,9 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     // --------------------------------------------------------------------
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
 
-    // let f1_lock =
-    //     build_script_f1_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
-
     let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
-    // let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(&sk_keypair).0;
-    // let f2_lock =
-    //     build_script_f2_blake3_locked(&PublicKey::new(pk_signer), &flow_id_prefix, B_PARAM);
 
     fs::create_dir_all(OUTPUT_DIR)?;
-
-    // 4. Construct tx_f1
 
     let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
         &secp,
@@ -331,18 +268,19 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         &secp,
         &sk_keypair,
+        network,
         &tx_f1,
         tx_f1.output[0].value.to_sat(),
         &f1_lock,
         &f1_spend_info,
-        network,
         &flow_id_prefix,
         args.fee_rate,
         args.x,
         nonce,
     )?;
 
-    let receiver_addr = Address::from_str(&args.receiver)?.require_network(network)?;
+    let receiver_addr =
+        Address::from_str(&args.receiver)?.require_network(network)?;
     let (spending_tx, _) = create_and_sign_spending_tx(
         &secp,
         &sk_keypair,
@@ -355,36 +293,6 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
         args.x,
         nonce,
     )?;
-
-    // // Update transaction information for JSON output
-    // demo_output.transactions = Some(TransactionInfo {
-    //     f1: TxInfo {
-    //         txid: tx_f1_id.to_string(),
-    //         file_path: f1_file_path,
-    //     },
-    //     f2: TxInfo {
-    //         txid: tx_f2_id.to_string(),
-    //         file_path: f2_file_path,
-    //     },
-    //     nonce,
-    //     flow_id,
-    // });
-
-    // // If JSON output is requested, print the full JSON structure
-    // let json_output = serde_json::to_string_pretty(&demo_output)?;
-
-    // // If a JSON output file is specified, write to it
-    // if let Some(file_path) = &args.json_output_file {
-    //     fs::create_dir_all(
-    //         std::path::Path::new(file_path)
-    //             .parent()
-    //             .unwrap_or(std::path::Path::new("./")),
-    //     )?;
-    //     fs::write(file_path, &json_output)?;
-    // } else {
-    //     // Otherwise print to stdout
-    //     println!("{json_output}");
-    // }
 
     if !args.dry_run {
         println!("▶️  Pushed f1, txid: {}", tx_f1.compute_txid());
@@ -422,8 +330,11 @@ fn create_and_sign_tx_f1(
 ) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
     // ── build F1 locking script ─────────────────────────────────────────
     let pk_signer = sk_keypair.public_key();
-    let lock =
-        build_script_f1_blake3_locked(&bitcoin::PublicKey::new(pk_signer), flow_id_prefix, B_PARAM);
+    let lock = build_script_f1_blake3_locked(
+        &bitcoin::PublicKey::new(pk_signer),
+        flow_id_prefix,
+        B_PARAM,
+    );
 
     // ── wrap in a Taproot tree & derive its address ─────────────────────
     let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
@@ -457,7 +368,9 @@ fn create_and_sign_tx_f1(
 
     // Sign the funding input (P2WPKH)
     let signer_addr = Address::p2wpkh(
-        &CompressedPublicKey::try_from(bitcoin::PublicKey::new(sk_keypair.public_key()))?,
+        &CompressedPublicKey::try_from(bitcoin::PublicKey::new(
+            sk_keypair.public_key(),
+        ))?,
         network,
     );
     let signer_pkh = signer_addr
@@ -465,8 +378,9 @@ fn create_and_sign_tx_f1(
         .expect("addr")
         .program() // 20 bytes = hash160(pubkey)
         .to_owned();
-    let script_code =
-        ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_slice(signer_pkh.as_bytes())?);
+    let script_code = ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_slice(
+        signer_pkh.as_bytes(),
+    )?);
     let mut sighash_cache = SighashCache::new(&mut tx_f1);
     let sighash = sighash_cache.p2wsh_signature_hash(
         0,
@@ -480,8 +394,10 @@ fn create_and_sign_tx_f1(
     );
     let mut sig_ser = sig.serialize_der().to_vec();
     sig_ser.push(EcdsaSighashType::All as u8);
-    tx_f1.input[0].witness =
-        Witness::from_slice(&[sig_ser, sk_keypair.public_key().serialize().to_vec()]);
+    tx_f1.input[0].witness = Witness::from_slice(&[
+        sig_ser,
+        sk_keypair.public_key().serialize().to_vec(),
+    ]);
 
     Ok((tx_f1, lock, spend_info))
 }
@@ -490,20 +406,23 @@ fn create_and_sign_tx_f1(
 fn create_and_sign_tx_f2(
     secp: &Secp256k1<secp256k1::All>,
     sk_keypair: &Keypair,
+    network: Network,
     tx_f1: &bitcoin::Transaction,
     f1_output_value: u64,
     f1_lock: &ScriptBuf,
     f1_spend_info: &TaprootSpendInfo,
-    network: Network,
     flow_id_prefix: &[u8],
     fee_rate: u64,
-    x_val: u32,
+    x: u32,
     nonce: u64,
 ) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
     // ── build F2 locking script & Taproot branch ────────────────────────
     let pk_signer = sk_keypair.public_key();
-    let f2_lock =
-        build_script_f2_blake3_locked(&bitcoin::PublicKey::new(pk_signer), flow_id_prefix, B_PARAM);
+    let f2_lock = build_script_f2_blake3_locked(
+        &bitcoin::PublicKey::new(pk_signer),
+        flow_id_prefix,
+        B_PARAM,
+    );
     let x_only_pk = secp256k1::XOnlyPublicKey::from_keypair(sk_keypair).0;
     let spend_info = TaprootBuilder::new()
         .add_leaf(0, f2_lock.clone())
@@ -560,7 +479,7 @@ fn create_and_sign_tx_f2(
 
     // Encode input_value || nonce
     let message = [
-        x_val.to_le_bytes(),
+        x.to_le_bytes(),
         nonce.to_le_bytes()[0..4].try_into()?,
         nonce.to_le_bytes()[4..8].try_into()?,
     ]
@@ -591,7 +510,7 @@ fn create_and_sign_spending_tx(
     f2_lock: &ScriptBuf,
     f2_spend_info: &TaprootSpendInfo,
     fee_rate: u64,
-    x_val: u32,
+    x: u32,
     nonce: u64,
 ) -> anyhow::Result<(bitcoin::Transaction, String)> {
     let fee_spending_tx = estimate_fee_vbytes(17082, fee_rate); // 1 input P2TR + 1 output
@@ -641,7 +560,7 @@ fn create_and_sign_spending_tx(
 
     // Encode input_value || nonce
     let message = [
-        x_val.to_le_bytes(),
+        x.to_le_bytes(),
         nonce.to_le_bytes()[0..4].try_into()?,
         nonce.to_le_bytes()[4..8].try_into()?,
     ]

@@ -85,7 +85,7 @@ pub fn write_transaction_to_file(
     file_name: &str,
 ) -> anyhow::Result<String> {
     std::fs::create_dir_all(output_dir)?;
-    let path = format!("{}/{}.tx", output_dir, file_name);
+    let path = format!("{output_dir}/{file_name}.tx");
     std::fs::write(&path, bitcoin::consensus::encode::serialize_hex(tx))?;
     Ok(path)
 }

@@ -372,11 +372,10 @@ fn build_script_reconstruct_x() -> ScriptBuf {
 }
 
 /// Build an F1 script with onchain BLAKE3, checking x>F1_THRESHOLD and the top (b_bits/8) bytes match flow_id_prefix.
-pub fn build_script_f1_blake3_locked_with_mode(
+pub fn build_script_f1_blake3_locked(
     signer_pubkey: &PublicKey,
     flow_id_prefix: &[u8],
     _b_bits: usize,
-    test_mode: bool,
 ) -> ScriptBuf {
     let prefix_len = flow_id_prefix.len();
     let total_msg_len = 12; // x_4b + r_4b0 + r_4b1
@@ -385,12 +384,7 @@ pub fn build_script_f1_blake3_locked_with_mode(
     // 1) Script to check signature
     let verify_signature_script = {
         let mut b = Builder::new();
-        if test_mode {
-            // workaround an issue with sig verification implementation in script executor
-            b = b.push_key(signer_pubkey);
-        } else {
-            b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
-        }
+        b = b.push_x_only_key(&XOnlyPublicKey::from(signer_pubkey.inner));
         b.push_opcode(opcodes::all::OP_CHECKSIGVERIFY).into_script()
     };
 
@@ -440,19 +434,6 @@ pub fn build_script_f1_blake3_locked_with_mode(
         prefix_cmp_script,
         success_script,
     ])
-}
-
-pub fn build_script_f1_blake3_locked(
-    signer_pubkey: &PublicKey,
-    flow_id_prefix: &[u8],
-    _b_bits: usize,
-) -> ScriptBuf {
-    build_script_f1_blake3_locked_with_mode(
-        signer_pubkey,
-        flow_id_prefix,
-        _b_bits,
-        false,
-    )
 }
 
 /// Build an F2 script with onchain BLAKE3, checking x<F2_THRESHOLD and prefix

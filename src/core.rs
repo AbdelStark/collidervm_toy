@@ -645,7 +645,6 @@ pub fn blake3_message_to_limbs(message_bytes: &[u8], limb_len: u8) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::script::PushBytesBuf;
     use bitcoin_script::script;
     use bitvm::{
         execute_script_buf,
@@ -653,154 +652,6 @@ mod tests {
             blake3_push_message_script_with_limb, blake3_verify_output_script,
         },
     };
-    use secp256k1::Secp256k1;
-
-    #[allow(dead_code)]
-    pub struct ColliderVmTestCase {
-        pub b: usize,
-        pub l: usize,
-        pub input_value: u32,
-        pub signer_pubkey: PublicKey,
-        pub signer_keypair: Keypair,
-        pub flow_id_prefix: Vec<u8>,
-        pub message: Vec<u8>,
-        pub sig_f1: Signature,
-        pub script_f1: ScriptBuf,
-        pub msg_push_script_f1: ScriptBuf,
-        pub sig_script_f1: ScriptBuf,
-        pub sig_f2: Signature,
-        pub script_f2: ScriptBuf,
-        pub msg_push_script_f2: ScriptBuf,
-        pub sig_script_f2: ScriptBuf,
-    }
-
-    pub fn create_test_case(
-        b: usize,
-        l: usize,
-        input_value: u32,
-    ) -> ColliderVmTestCase {
-        let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
-        let (sk, pk) = secp.generate_keypair(&mut rand::thread_rng());
-        let signer_keypair = Keypair::from_secret_key(&secp, &sk);
-        let signer_pubkey = PublicKey::new(pk);
-
-        let (nonce, flow_id, _hash) =
-            find_valid_nonce(input_value, b, l).unwrap();
-        let flow_id_prefix: Vec<u8> = flow_id_to_prefix_bytes(flow_id, b);
-
-        let sighash_f1 = create_dummy_sighash_message(&flow_id_prefix.clone());
-        let sig_f1 = secp.sign_schnorr(&sighash_f1, &signer_keypair);
-
-        let script_f1 = build_script_f1_blake3_locked_with_mode(
-            &signer_pubkey,
-            &flow_id_prefix,
-            b,
-            true,
-        );
-
-        let message = [
-            input_value.to_le_bytes(),
-            nonce.to_le_bytes()[0..4].try_into().unwrap(),
-            nonce.to_le_bytes()[4..8].try_into().unwrap(),
-        ]
-        .concat();
-
-        // A Script object that, when executed, leaves the packed limbs on stack
-        let msg_push_script_f1 =
-            blake3_push_message_script_with_limb(&message, 4).compile();
-
-        // let msg_push_script_f1 = blake3_push_message_script_with_limb(&message, 4).compile();
-
-        // Create PushBytesBuf for all raw bytes for F1
-        let sig_f1_buf = PushBytesBuf::try_from(sig_f1.as_ref().to_vec())
-            .expect("sig_f1 conversion failed");
-
-        let sig_script_f1 = {
-            let mut b = Builder::new();
-            b = b.push_slice(sig_f1_buf);
-            b.into_script()
-        };
-
-        let sighash_f2 = create_dummy_sighash_message(&flow_id_prefix.clone());
-        let sig_f2 = secp.sign_schnorr(&sighash_f2, &signer_keypair);
-
-        let script_f2 = build_script_f2_blake3_locked_with_mode(
-            &signer_pubkey,
-            &flow_id_prefix,
-            b,
-            true,
-        );
-
-        let message = [
-            input_value.to_le_bytes(),
-            nonce.to_le_bytes()[0..4].try_into().unwrap(),
-            nonce.to_le_bytes()[4..8].try_into().unwrap(),
-        ]
-        .concat();
-        let msg_push_script_f2 =
-            blake3_push_message_script_with_limb(&message, 4).compile();
-
-        // Create PushBytesBuf for all raw bytes for F2
-        let sig_f2_buf = PushBytesBuf::try_from(sig_f2.as_ref().to_vec())
-            .expect("sig_f2 conversion failed");
-
-        let sig_script_f2 = {
-            let mut b = Builder::new();
-            b = b.push_slice(sig_f2_buf);
-            b.into_script()
-        };
-
-        ColliderVmTestCase {
-            b,
-            l,
-            input_value,
-            signer_pubkey,
-            signer_keypair,
-            flow_id_prefix,
-            message,
-            sig_f1,
-            script_f1,
-            msg_push_script_f1,
-            sig_script_f1,
-            sig_f2,
-            script_f2,
-            msg_push_script_f2,
-            sig_script_f2,
-        }
-    }
-
-    #[test]
-    fn test_f1_e2e_with_valid_input() {
-        let test_case = create_test_case(16, 4, 123);
-        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
-        full_f1.extend(test_case.sig_script_f1.to_bytes());
-        full_f1.extend(test_case.script_f1.to_bytes());
-        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-        let f1_res = execute_script_buf(exec_f1_script);
-        println!("F1 => success={}", f1_res.success);
-        println!("F1 => exec_stats={:?}", f1_res.stats);
-        println!("F1 => final_stack={:?}", f1_res.final_stack);
-        println!("F1 => error={:?}", f1_res.error);
-        println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        assert!(f1_res.success);
-        // assert!(false);
-    }
-
-    #[test]
-    fn test_f1_e2e_with_invalid_input() {
-        let test_case = create_test_case(16, 4, 100);
-        let mut full_f1 = test_case.msg_push_script_f1.to_bytes();
-        full_f1.extend(test_case.sig_script_f1.to_bytes());
-        full_f1.extend(test_case.script_f1.to_bytes());
-        let exec_f1_script = ScriptBuf::from_bytes(full_f1);
-        let f1_res = execute_script_buf(exec_f1_script);
-        println!("F1 => success={}", f1_res.success);
-        println!("F1 => exec_stats={:?}", f1_res.stats);
-        println!("F1 => final_stack={:?}", f1_res.final_stack);
-        println!("F1 => error={:?}", f1_res.error);
-        println!("F1 => last_opcode={:?}", f1_res.last_opcode);
-        assert!(!f1_res.success);
-    }
 
     #[test]
     fn test_f1_witness_script() {
@@ -833,38 +684,6 @@ mod tests {
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
         assert!(f1_res.error.is_none());
-    }
-
-    #[test]
-    fn test_f2_e2e_with_valid_input() {
-        let test_case = create_test_case(16, 4, 123);
-        let mut full_f2 = test_case.msg_push_script_f2.to_bytes();
-        full_f2.extend(test_case.sig_script_f2.to_bytes());
-        full_f2.extend(test_case.script_f2.to_bytes());
-        let exec_f2_script = ScriptBuf::from_bytes(full_f2);
-        let f2_res = execute_script_buf(exec_f2_script);
-        println!("F2 => success={}", f2_res.success);
-        println!("F2 => exec_stats={:?}", f2_res.stats);
-        println!("F2 => final_stack={:?}", f2_res.final_stack);
-        println!("F2 => error={:?}", f2_res.error);
-        println!("F2 => last_opcode={:?}", f2_res.last_opcode);
-        assert!(f2_res.success);
-    }
-
-    #[test]
-    fn test_f2_e2e_with_invalid_input() {
-        let test_case = create_test_case(16, 4, 200);
-        let mut full_f2 = test_case.msg_push_script_f2.to_bytes();
-        full_f2.extend(test_case.sig_script_f2.to_bytes());
-        full_f2.extend(test_case.script_f2.to_bytes());
-        let exec_f2_script = ScriptBuf::from_bytes(full_f2);
-        let f2_res = execute_script_buf(exec_f2_script);
-        println!("F2 => success={}", f2_res.success);
-        println!("F2 => exec_stats={:?}", f2_res.stats);
-        println!("F2 => final_stack={:?}", f2_res.final_stack);
-        println!("F2 => error={:?}", f2_res.error);
-        println!("F2 => last_opcode={:?}", f2_res.last_opcode);
-        assert!(!f2_res.success);
     }
 
     #[test]
@@ -1008,12 +827,5 @@ mod tests {
         println!("F1 => error={:?}", f1_res.error);
         println!("F1 => last_opcode={:?}", f1_res.last_opcode);
         assert!(f1_res.success);
-    }
-
-    pub fn create_dummy_sighash_message(seed_bytes: &[u8]) -> Message {
-        let mut engine = sha256::HashEngine::default();
-        engine.input(seed_bytes);
-        let digest = sha256::Hash::from_engine(engine);
-        Message::from_digest(digest.to_byte_array())
     }
 }

@@ -47,7 +47,8 @@ use std::str::FromStr;
 
 mod output;
 use output::{
-    write_demo_output_to_file, DemoOutput, DemoParameters, KeyInfo, KeyPair, TransactionInfo, TxInfo
+    DemoOutput, DemoParameters, KeyInfo, KeyPair, TransactionInfo, TxInfo,
+    write_demo_output_to_file,
 };
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)

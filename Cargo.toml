@@ -26,3 +26,6 @@ opt-level = 3
 
 [profile.release]
 lto = true
+
+[dev-dependencies]
+rstest = "0.25.0"

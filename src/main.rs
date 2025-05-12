@@ -25,7 +25,7 @@
 //!
 //! ## Build & run
 //! ```bash
-//! cargo run --bin demo -- -i 150 --network regtest  # builds f1.tx + f2.tx
+//! cargo run -- --receiver bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6
 //! ```
 
 #![allow(clippy::too_many_arguments)]
@@ -33,24 +33,28 @@
 use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{Keypair, Secp256k1};
-use bitcoin::{Address, Amount, Network, OutPoint, Txid};
+use bitcoin::{Address, OutPoint, Txid};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
 use collidervm_toy::transactions::{
     create_and_sign_spending_tx, create_and_sign_tx_f1, create_and_sign_tx_f2,
 };
-use collidervm_toy::utils::wait_for_confirmation;
-use serde::Serialize;
-use std::{fs, str::FromStr};
+use collidervm_toy::utils::{
+    wait_for_confirmation, wrap_network, write_transaction_to_file,
+};
+use std::str::FromStr;
+
+mod output;
+use output::{
+    write_demo_output_to_file, DemoOutput, DemoParameters, KeyInfo, KeyPair, TransactionInfo, TxInfo
+};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 200_000;
 /// Hard‑coded ColliderVM parameters (match the toy simulation)
 const L_PARAM: usize = 4;
 const B_PARAM: usize = 16; // multiple of 8 ≤ 32
-
-const OUTPUT_DIR: &str = "target/demo";
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -68,8 +72,12 @@ struct Args {
     fee_rate: u64,
 
     /// Write JSON output to a file instead of stdout
-    #[arg(long)]
-    json_output_file: Option<String>,
+    #[arg(long, default_value = "target/demo")]
+    output_dir: String,
+
+    /// Write JSON output to a file instead of stdout
+    #[arg(long, default_value = "demo.json")]
+    output_file: String,
 
     /// receiver of the spending tx
     #[arg(long)]
@@ -94,58 +102,7 @@ struct Args {
     /// bitcoin wallet name
     #[arg(long, default_value = "alice")]
     wallet_name: String,
-    /// bitcoin wallet passphrase
-    #[arg(long, default_value = "alicePsWd")]
-    wallet_passphrase: String,
 }
-
-/// Structure for serializing key details to JSON
-// #[derive(Serialize)]
-// struct KeyInfo {
-//     pub signer: KeyPair,
-//     pub operator: KeyPair,
-// }
-
-/// Structure for serializing individual key pairs to JSON
-#[derive(Serialize)]
-struct KeyPair {
-    pub address: String,
-    pub wif: String,
-}
-
-// /// Structure for serializing transaction details to JSON
-// #[derive(Serialize)]
-// struct TransactionInfo {
-//     f1: TxInfo,
-//     f2: TxInfo,
-//     nonce: u64,
-//     flow_id: u32,
-// }
-
-// /// Structure for serializing individual transaction information
-// #[derive(Serialize)]
-// struct TxInfo {
-//     txid: String,
-//     file_path: String,
-// }
-
-// /// Complete demo output for JSON serialization
-// #[derive(Serialize)]
-// struct DemoOutput {
-//     pub keys: KeyInfo,
-//     transactions: Option<TransactionInfo>,
-//     input_x: u32,
-//     parameters: DemoParameters,
-// }
-
-// /// Parameters used in the demo for JSON serialization
-// #[derive(Serialize)]
-// struct DemoParameters {
-//     required_amount_sat: u64,
-//     l_param: usize,
-//     b_param: usize,
-// }
-
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -180,12 +137,7 @@ fn main() -> anyhow::Result<()> {
             vout: 0,
         }
     } else {
-        // In normal mode
-        get_funding_outpoint(
-            &rpc_client,
-            &signer_addr,
-            REQUIRED_AMOUNT_SAT,
-        )
+        get_funding_outpoint(&rpc_client, &signer_addr, REQUIRED_AMOUNT_SAT)
     };
 
     // In a production‑ready tool we would RPC‑query the node to retrieve the
@@ -194,9 +146,6 @@ fn main() -> anyhow::Result<()> {
     // Signer's P2WPKH address.  The instructions ensured the user sends that.
     let funding_value_sat = REQUIRED_AMOUNT_SAT;
 
-    // --------------------------------------------------------------------
-    // 2. Find nonce r & flow‑id d  (operator work)
-    // --------------------------------------------------------------------
     let (nonce, flow_id, _hash) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
         .expect("nonce search should succeed quickly");
 
@@ -204,14 +153,11 @@ fn main() -> anyhow::Result<()> {
         "Found nonce r = {nonce} selecting flow d = {flow_id} (B={B_PARAM} bits, L={L_PARAM})"
     );
 
-    // --------------------------------------------------------------------
-    // 3. Build locking scripts for F1 & F2 (for the chosen flow)
-    // --------------------------------------------------------------------
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
 
     let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
 
-    let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
+    let (f1_tx, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
         B_PARAM,
         &secp,
         &sk_keypair,
@@ -222,13 +168,13 @@ fn main() -> anyhow::Result<()> {
         args.fee_rate,
     )?;
 
-    let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
+    let (f2_tx, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         B_PARAM,
         &secp,
         &sk_keypair,
         network,
-        &tx_f1,
-        tx_f1.output[0].value.to_sat(),
+        &f1_tx,
+        f1_tx.output[0].value.to_sat(),
         &f1_lock,
         &f1_spend_info,
         &flow_id_prefix,
@@ -243,9 +189,9 @@ fn main() -> anyhow::Result<()> {
     let spending_tx = create_and_sign_spending_tx(
         &secp,
         &sk_keypair,
-        &tx_f2,
-        tx_f2.output[0].value.to_sat(),
-        receiver_addr,
+        &f2_tx,
+        f2_tx.output[0].value.to_sat(),
+        &receiver_addr,
         &f2_lock,
         &f2_spend_info,
         args.fee_rate,
@@ -253,13 +199,56 @@ fn main() -> anyhow::Result<()> {
         nonce,
     )?;
 
+    let f1_tx_path = write_transaction_to_file(&f1_tx, &args.output_dir, "f1")?;
+    let f2_tx_path = write_transaction_to_file(&f2_tx, &args.output_dir, "f2")?;
+    let spending_tx_path =
+        write_transaction_to_file(&spending_tx, &args.output_dir, "spending")?;
+
+    let demo_output = DemoOutput {
+        keys: KeyInfo {
+            signer: KeyPair {
+                address: signer_addr.to_string(),
+                wif: bitcoin::PrivateKey::new(sk_signer, network).to_wif(),
+            },
+            // operator: KeyPair {
+            //     address: receiver_addr.to_string(),
+            //     wif: "".to_string(), // TODO
+            // },
+        },
+        transactions: Some(TransactionInfo {
+            f1: TxInfo {
+                txid: f1_tx.compute_txid().to_string(),
+                file_path: f1_tx_path,
+            },
+            f2: TxInfo {
+                txid: f2_tx.compute_txid().to_string(),
+                file_path: f2_tx_path,
+            },
+            spending: TxInfo {
+                txid: spending_tx.compute_txid().to_string(),
+                file_path: spending_tx_path,
+            },
+            nonce,
+            flow_id,
+        }),
+        input_x: args.x,
+        parameters: DemoParameters {
+            required_amount_sat: REQUIRED_AMOUNT_SAT,
+            l_param: L_PARAM,
+            b_param: B_PARAM,
+        },
+    };
+
+    write_demo_output_to_file(&demo_output, &args.output_file)?;
+    println!("Wrote JSON output to {}", &args.output_file);
+
     if !args.dry_run {
-        println!("▶️  Pushed f1, txid: {}", tx_f1.compute_txid());
-        let f1_txid = rpc_client.send_raw_transaction(&tx_f1)?;
+        println!("▶️  Pushed f1, txid: {}", f1_tx.compute_txid());
+        let f1_txid = rpc_client.send_raw_transaction(&f1_tx)?;
         wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
 
-        println!("▶️  Pushed f2, txid: {}", tx_f2.compute_txid());
-        let f2_txid = rpc_client.send_raw_transaction(&tx_f2)?;
+        println!("▶️  Pushed f2, txid: {}", f2_tx.compute_txid());
+        let f2_txid = rpc_client.send_raw_transaction(&f2_tx)?;
         wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
 
         println!(
@@ -273,34 +262,27 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn wrap_network(network: &str) -> Network {
-    match network {
-        "regtest" => Network::Regtest,
-        "signet" => Network::Signet,
-        "testnet" => Network::Testnet,
-        _ => todo!(),
-    }
-}
-
 fn get_funding_outpoint(
     rpc_client: &bitcoincore_rpc::Client,
     signer_addr: &bitcoin::Address,
     required_amount_sat: u64,
 ) -> bitcoin::OutPoint {
-    let txid = rpc_client.send_to_address(
-        signer_addr,
-        bitcoin::Amount::from_sat(required_amount_sat),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    ).map_err(|err| {
-        panic!("Error: {}", err)
-    }).unwrap();
+    let txid = rpc_client
+        .send_to_address(
+            signer_addr,
+            bitcoin::Amount::from_sat(required_amount_sat),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(|err| panic!("Error: {}", err))
+        .unwrap();
 
-    let confirmed_funding_tx = rpc_client.get_raw_transaction(&txid, None).unwrap();
+    let confirmed_funding_tx =
+        rpc_client.get_raw_transaction(&txid, None).unwrap();
     let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
     let vout = if *tx_out_sp_0 == signer_addr.script_pubkey() {
         0
@@ -308,8 +290,5 @@ fn get_funding_outpoint(
         1
     };
 
-    bitcoin::OutPoint {
-        txid,
-        vout,
-    }
+    bitcoin::OutPoint { txid, vout }
 }

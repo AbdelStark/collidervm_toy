@@ -213,7 +213,7 @@ pub fn create_and_sign_spending_tx(
     sk_keypair: &Keypair,
     tx_f2: &bitcoin::Transaction,
     f2_output_value: u64,
-    receiver_addr: Address,
+    receiver_addr: &Address,
     f2_lock: &ScriptBuf,
     f2_spend_info: &TaprootSpendInfo,
     fee_rate: u64,

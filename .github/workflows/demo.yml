@@ -9,7 +9,7 @@ on:
 
 jobs:
   demo-regtest:
-    name: Run main.rs with Regtest
+    name: Run Demo on Regtest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,29 +17,40 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
 
+      - name: Build
+        run: cargo build --release
+
       - name: Install Docker Compose
         run: sudo apt-get update && sudo apt-get install -y docker-compose
 
-      - name: Start Bitcoin Regtest (docker compose)
+      - name: Start Bitcoin Regtest
         working-directory: scripts/demo
         run: docker compose up -d
 
       - name: Wait for bitcoind to be ready
         run: |
-          for i in {1..30}; do
+          for i in {1..10}; do
             if docker exec bitcoind-regtest bitcoin-cli -regtest -rpcuser=user -rpcpassword=PaSsWoRd getblockchaininfo; then
               echo "bitcoind is ready" && exit 0
             fi
             echo "Waiting for bitcoind..."
-            sleep 2
+            sleep 1
           done
           echo "bitcoind did not start in time" && exit 1
 
-      - name: Unlock wallet
-        run: docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd walletpassphrase alicePsWd 600
+        # Not sure why wallet created in bitcoin-init.sh is not available here 
+      - name: Create wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd -named createwallet wallet_name=alice passphrase=alicePsWd load_on_startup=true descriptors=false
 
-      - name: Build
-        run: cargo build --release
+      - name: Unlock wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd walletpassphrase alicePsWd 600
+
+      - name: Fund wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd -generate 101
 
       - name: Run
         run: ./target/release/collidervm_toy
+
+      - name: Stop Bitcoin Regtest
+        working-directory: scripts/demo
+        run: docker compose down

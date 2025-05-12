@@ -41,6 +41,7 @@ use collidervm_toy::transactions::{
     create_and_sign_spending_tx, create_and_sign_tx_f1, create_and_sign_tx_f2,
 };
 use collidervm_toy::utils::wait_for_confirmation;
+use serde::Serialize;
 use std::{fs, str::FromStr};
 
 /// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
@@ -98,19 +99,19 @@ struct Args {
     wallet_passphrase: String,
 }
 
-// /// Structure for serializing key details to JSON
+/// Structure for serializing key details to JSON
 // #[derive(Serialize)]
 // struct KeyInfo {
 //     pub signer: KeyPair,
 //     pub operator: KeyPair,
 // }
 
-// /// Structure for serializing individual key pairs to JSON
-// #[derive(Serialize)]
-// struct KeyPair {
-//     pub address: String,
-//     pub wif: String,
-// }
+/// Structure for serializing individual key pairs to JSON
+#[derive(Serialize)]
+struct KeyPair {
+    pub address: String,
+    pub wif: String,
+}
 
 // /// Structure for serializing transaction details to JSON
 // #[derive(Serialize)]
@@ -145,14 +146,6 @@ struct Args {
 //     b_param: usize,
 // }
 
-fn wrap_network(network: &str) -> Network {
-    match network {
-        "regtest" => Network::Regtest,
-        "signet" => Network::Signet,
-        "testnet" => Network::Testnet,
-        _ => todo!(),
-    }
-}
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -181,42 +174,18 @@ fn main() -> anyhow::Result<()> {
     //     CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
     // let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
 
-    let (funding_txid, funding_vout) = if args.dry_run {
-        // In dry run mode, use a placeholder txid
-        (Txid::all_zeros(), 0)
+    let funding_outpoint = if args.dry_run {
+        OutPoint {
+            txid: Txid::all_zeros(),
+            vout: 0,
+        }
     } else {
         // In normal mode
-        let funding_tx = rpc_client.send_to_address(
+        get_funding_outpoint(
+            &rpc_client,
             &signer_addr,
-            Amount::from_sat(REQUIRED_AMOUNT_SAT),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ).map_err(|err| {
-            panic!(
-                "Error: {}, please run:\n
-docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} walletpassphrase {} 600\n",
-                err, args.network, args.rpc_user, args.rpc_password, args.wallet_passphrase
-            );
-        }).unwrap();
-
-        let confirmed_funding_tx =
-            rpc_client.get_raw_transaction(&funding_tx, None)?;
-        let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
-        let vout = if *tx_out_sp_0 == signer_addr.script_pubkey() {
-            0
-        } else {
-            1
-        };
-
-        (funding_tx, vout)
-    };
-    let funding_outpoint = OutPoint {
-        txid: funding_txid,
-        vout: funding_vout,
+            REQUIRED_AMOUNT_SAT,
+        )
     };
 
     // In a production‑ready tool we would RPC‑query the node to retrieve the
@@ -241,8 +210,6 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
 
     let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
-
-    fs::create_dir_all(OUTPUT_DIR)?;
 
     let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
         B_PARAM,
@@ -272,6 +239,7 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
 
     let receiver_addr =
         Address::from_str(&args.receiver)?.require_network(network)?;
+
     let spending_tx = create_and_sign_spending_tx(
         &secp,
         &sk_keypair,
@@ -303,4 +271,45 @@ docker exec -it bitcoind-regtest bitcoin-cli -{} --rpcuser={} --rpcpassword={} w
     }
 
     Ok(())
+}
+
+fn wrap_network(network: &str) -> Network {
+    match network {
+        "regtest" => Network::Regtest,
+        "signet" => Network::Signet,
+        "testnet" => Network::Testnet,
+        _ => todo!(),
+    }
+}
+
+fn get_funding_outpoint(
+    rpc_client: &bitcoincore_rpc::Client,
+    signer_addr: &bitcoin::Address,
+    required_amount_sat: u64,
+) -> bitcoin::OutPoint {
+    let txid = rpc_client.send_to_address(
+        signer_addr,
+        bitcoin::Amount::from_sat(required_amount_sat),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ).map_err(|err| {
+        panic!("Error: {}", err)
+    }).unwrap();
+
+    let confirmed_funding_tx = rpc_client.get_raw_transaction(&txid, None).unwrap();
+    let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
+    let vout = if *tx_out_sp_0 == signer_addr.script_pubkey() {
+        0
+    } else {
+        1
+    };
+
+    bitcoin::OutPoint {
+        txid,
+        vout,
+    }
 }

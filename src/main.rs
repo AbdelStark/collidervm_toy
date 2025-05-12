@@ -282,7 +282,7 @@ fn get_funding_outpoint(
             None,
             None,
         )
-        .map_err(|err| panic!("Error: {}", err))
+        .map_err(|err| panic!("Error: {err}"))
         .unwrap();
 
     let confirmed_funding_tx =

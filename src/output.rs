@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::Serialize;
-use serde_json;
 use std::fs;
 use std::path::Path;
 

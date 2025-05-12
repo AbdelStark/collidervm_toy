@@ -81,7 +81,10 @@ struct Args {
     output_file: String,
 
     /// receiver of the spending tx
-    #[arg(long, default_value = "bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6")]
+    #[arg(
+        long,
+        default_value = "bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6"
+    )]
     receiver: String,
 
     /// Network name

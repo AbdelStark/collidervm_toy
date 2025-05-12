@@ -36,10 +36,10 @@ jobs:
           echo "bitcoind did not start in time" && exit 1
 
       - name: Unlock wallet
-        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd walletpassphrase alicePsWd 600
+        run: docker exec -it bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd walletpassphrase alicePsWd 600
 
-      - name: Build project
+      - name: Build
         run: cargo build --release
 
-      - name: Run main binary (example)
+      - name: Run
         run: ./target/release/collidervm_toy

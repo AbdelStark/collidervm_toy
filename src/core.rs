@@ -89,7 +89,7 @@ pub fn calculate_flow_id(
     nonce: u64,
     b_bits: usize,
     l_bits: usize,
-) -> Result<(u32, [u8; 32]), String> {
+) -> Option<(u32, [u8; 32])> {
     let mut hasher = Hasher::new();
     hasher.update(&input.to_le_bytes());
     hasher.update(&nonce.to_le_bytes());
@@ -108,11 +108,9 @@ pub fn calculate_flow_id(
 
     let max_flow_id = (1u64 << l_bits) as u32;
     if prefix_b < max_flow_id {
-        Ok((prefix_b, hash.as_bytes()[0..32].try_into().unwrap()))
+        Some((prefix_b, hash.as_bytes()[0..32].try_into().unwrap()))
     } else {
-        Err(format!(
-            "Hash prefix {prefix_b} (from H={hash}) >= {max_flow_id} (out of range)",
-        ))
+        None
     }
 }
 
@@ -154,13 +152,13 @@ pub fn find_valid_nonce(
     loop {
         // Check if the current nonce yields a valid flow ID
         match calculate_flow_id(input, nonce, b_bits, l_bits) {
-            Ok((flow_id, hash)) => {
+            Some((flow_id, hash)) => {
                 // Found a nonce `r` such that H(x, r)|_B = d ∈ D
                 progress.success(flow_id, nonce);
 
                 return Ok((nonce, flow_id, hash));
             }
-            Err(_) => {
+            None => {
                 // Hash prefix was outside the valid range [0, 2^L - 1], try next nonce
                 progress.update(nonce);
 

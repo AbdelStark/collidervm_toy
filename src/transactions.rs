@@ -213,7 +213,7 @@ pub fn create_and_sign_spending_tx(
     sk_keypair: &Keypair,
     tx_f2: &bitcoin::Transaction,
     f2_output_value: u64,
-    receiver_addr: Address,
+    receiver_addr: &Address,
     f2_lock: &ScriptBuf,
     f2_spend_info: &TaprootSpendInfo,
     fee_rate: u64,
@@ -285,4 +285,231 @@ pub fn create_and_sign_spending_tx(
     spending_tx.input[0].witness = witness;
 
     Ok(spending_tx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::Network;
+    use bitcoin::OutPoint;
+    use bitcoin::Txid;
+    use bitcoin::secp256k1::Keypair;
+    use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::secp256k1::rand::thread_rng;
+    use bitvm::dry_run_taproot_input;
+    use rstest::*;
+    use std::str::FromStr;
+
+    use crate::core::find_valid_nonce;
+    use crate::core::flow_id_to_prefix_bytes;
+
+    #[allow(dead_code)]
+    #[derive(Debug, Clone)]
+    struct TxContext {
+        secp: Secp256k1<secp256k1::All>,
+        sk_keypair: Keypair,
+        network: Network,
+        funding_outpoint: OutPoint,
+        funding_value_sat: u64,
+        fee_rate: u64,
+        l: usize,
+        b: usize,
+        x: u32,
+        nonce: u64,
+        flow_id_prefix: Vec<u8>,
+        receiver_addr: Address,
+    }
+
+    #[fixture]
+    fn tx_context() -> TxContext {
+        let secp = Secp256k1::new();
+        let sk_keypair = Keypair::new(&secp, &mut thread_rng());
+
+        let network = Network::Regtest;
+
+        let funding_outpoint = OutPoint {
+            txid: Txid::all_zeros(),
+            vout: 0,
+        };
+
+        let funding_value_sat = 100_000;
+        let fee_rate = 1;
+
+        const L: usize = 4;
+        const B: usize = 16;
+        let x = 123;
+
+        let (nonce, flow_id, _hash) = find_valid_nonce(x, B, L).unwrap();
+        let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B);
+        let receiver_addr =
+            Address::from_str("bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6")
+                .unwrap()
+                .require_network(network)
+                .unwrap();
+
+        TxContext {
+            secp,
+            sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            fee_rate,
+            l: L,
+            b: B,
+            x,
+            nonce,
+            flow_id_prefix,
+            receiver_addr,
+        }
+    }
+
+    #[rstest]
+    fn test_e2e_valid_input(tx_context: TxContext) -> anyhow::Result<()> {
+        let TxContext {
+            secp,
+            sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            fee_rate,
+            l: _,
+            b,
+            x,
+            nonce,
+            flow_id_prefix,
+            receiver_addr,
+        } = tx_context;
+        // F1 tx
+        let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
+            b,
+            &secp,
+            &sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            &flow_id_prefix,
+            fee_rate,
+        )?;
+        // F2 tx
+        let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
+            b,
+            &secp,
+            &sk_keypair,
+            network,
+            &tx_f1,
+            tx_f1.output[0].value.to_sat(),
+            &f1_lock,
+            &f1_spend_info,
+            &flow_id_prefix,
+            fee_rate,
+            x,
+            nonce,
+        )?;
+        // Spending tx
+        let spending_tx = create_and_sign_spending_tx(
+            &secp,
+            &sk_keypair,
+            &tx_f2,
+            tx_f2.output[0].value.to_sat(),
+            &receiver_addr,
+            &f2_lock,
+            &f2_spend_info,
+            fee_rate,
+            x,
+            nonce,
+        )?;
+
+        // --- Dry run F2 script logic ---
+        let exec_info_f2 = dry_run_taproot_input(&tx_f2, 0, &tx_f1.output);
+        assert!(
+            exec_info_f2.success,
+            "F2 script dry run failed: {:?}",
+            exec_info_f2.last_opcode
+        );
+
+        // --- Dry run spending script logic ---
+        let exec_info_spending =
+            dry_run_taproot_input(&spending_tx, 0, &tx_f2.output);
+        assert!(
+            exec_info_spending.success,
+            "Spending script dry run failed: {:?}",
+            exec_info_f2.last_opcode
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_e2e_invalid_input(tx_context: TxContext) -> anyhow::Result<()> {
+        let TxContext {
+            secp,
+            sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            fee_rate,
+            l: _,
+            b,
+            x,
+            nonce,
+            flow_id_prefix,
+            receiver_addr,
+        } = tx_context;
+        // F1 tx
+        let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
+            b,
+            &secp,
+            &sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            &flow_id_prefix,
+            fee_rate,
+        )?;
+        // F2 tx
+        let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
+            b,
+            &secp,
+            &sk_keypair,
+            network,
+            &tx_f1,
+            tx_f1.output[0].value.to_sat(),
+            &f1_lock,
+            &f1_spend_info,
+            &flow_id_prefix,
+            fee_rate,
+            x,
+            nonce,
+        )?;
+        // Spending tx
+        let spending_tx = create_and_sign_spending_tx(
+            &secp,
+            &sk_keypair,
+            &tx_f2,
+            tx_f2.output[0].value.to_sat(),
+            &receiver_addr,
+            &f2_lock,
+            &f2_spend_info,
+            fee_rate,
+            x + 1, // Invalid x
+            nonce,
+        )?;
+
+        // --- Dry run F2 script logic ---
+        let exec_info_f2 = dry_run_taproot_input(&tx_f2, 0, &tx_f1.output);
+        assert!(
+            exec_info_f2.success,
+            "F2 script dry run failed: {:?}",
+            exec_info_f2.last_opcode
+        );
+
+        // --- Dry run spending script logic ---
+        let exec_info_spending =
+            dry_run_taproot_input(&spending_tx, 0, &tx_f2.output);
+        assert!(
+            !exec_info_spending.success,
+            "Spending script dry run succeeded: {:?}",
+            exec_info_f2.last_opcode
+        );
+        Ok(())
+    }
 }

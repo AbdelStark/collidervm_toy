@@ -56,7 +56,7 @@ pub fn wait_for_confirmation(
         match rpc_client.get_raw_transaction_info(txid, None) {
             Ok(tx_info) => {
                 if let Some(c) = tx_info.confirmations {
-                    println!("Confirmations: {c}"); // Changed from {confirmations} to {c}
+                    println!("⏳ Confirmations: {c}"); // Changed from {confirmations} to {c}
                     if c >= confirmations {
                         println!("✅ Transaction is confirmed!");
                         break;
@@ -77,4 +77,24 @@ pub fn wait_for_confirmation(
         std::thread::sleep(Duration::from_secs(1)); // wait and poll again
     }
     Ok(())
+}
+
+pub fn write_transaction_to_file(
+    tx: &bitcoin::Transaction,
+    output_dir: &str,
+    file_name: &str,
+) -> anyhow::Result<String> {
+    std::fs::create_dir_all(output_dir)?;
+    let path = format!("{output_dir}/{file_name}.tx");
+    std::fs::write(&path, bitcoin::consensus::encode::serialize_hex(tx))?;
+    Ok(path)
+}
+
+pub fn wrap_network(network: &str) -> Network {
+    match network {
+        "regtest" => Network::Regtest,
+        "signet" => Network::Signet,
+        "testnet" => Network::Testnet,
+        _ => todo!(),
+    }
 }

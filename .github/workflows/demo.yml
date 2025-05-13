@@ -1,0 +1,56 @@
+name: Run Demo with Regtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  demo-regtest:
+    name: Run Demo on Regtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Install Docker Compose
+        run: sudo apt-get update && sudo apt-get install -y docker-compose
+
+      - name: Start Bitcoin Regtest
+        working-directory: scripts/demo
+        run: docker compose up -d
+
+      - name: Wait for bitcoind to be ready
+        run: |
+          for i in {1..10}; do
+            if docker exec bitcoind-regtest bitcoin-cli -regtest -rpcuser=user -rpcpassword=PaSsWoRd getblockchaininfo; then
+              echo "bitcoind is ready" && exit 0
+            fi
+            echo "Waiting for bitcoind..."
+            sleep 1
+          done
+          echo "bitcoind did not start in time" && exit 1
+
+        # Not sure why wallet created in bitcoin-init.sh is not available here 
+      - name: Create wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd -named createwallet wallet_name=alice passphrase=alicePsWd load_on_startup=true descriptors=false
+
+      - name: Unlock wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd walletpassphrase alicePsWd 600
+
+      - name: Fund wallet
+        run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd -generate 101
+
+      - name: Run
+        run: ./target/release/collidervm_toy
+
+      - name: Stop Bitcoin Regtest
+        working-directory: scripts/demo
+        run: docker compose down

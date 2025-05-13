@@ -45,10 +45,15 @@ pub struct DemoParameters {
     pub b_param: usize,
 }
 
-pub fn write_demo_output_to_file<P: AsRef<Path>>(
+pub fn write_demo_output_to_file(
     output: &crate::DemoOutput,
-    path: P,
+    output_dir: &str,
+    path: &str,
 ) -> Result<()> {
-    fs::write(path, serde_json::to_string_pretty(output)?)?;
+    let dir = Path::new(output_dir);
+    fs::create_dir_all(dir)?;
+    let file_path = dir.join(path);
+    println!("Writing demo output to file: {file_path:?}");
+    fs::write(file_path, serde_json::to_string_pretty(output)?)?;
     Ok(())
 }

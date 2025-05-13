@@ -243,8 +243,11 @@ fn main() -> anyhow::Result<()> {
         },
     };
 
-    write_demo_output_to_file(&demo_output, &args.output_file)?;
-    println!("Wrote JSON output to {}", &args.output_file);
+    write_demo_output_to_file(
+        &demo_output,
+        &args.output_dir,
+        &args.output_file,
+    )?;
 
     if !args.dry_run {
         println!("▶️  Pushed f1, txid: {}", f1_tx.compute_txid());

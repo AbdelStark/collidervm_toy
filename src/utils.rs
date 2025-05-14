@@ -1,5 +1,5 @@
-use std::time::Duration;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
 use std::time::Instant;
 
 use bitcoin::{Network, Txid, secp256k1::SecretKey};
@@ -148,7 +148,8 @@ impl NonceSearchProgress {
             if self.hash_rates.len() > 10 {
                 self.hash_rates.remove(0);
             }
-            let avg_hash_rate: f64 = self.hash_rates.iter().sum::<f64>() / self.hash_rates.len() as f64;
+            let avg_hash_rate: f64 = self.hash_rates.iter().sum::<f64>()
+                / self.hash_rates.len() as f64;
             if let Some(pb) = &self.progress_bar {
                 pb.set_position(nonce);
                 let eta_secs = if nonce >= self.expected_attempts {
@@ -161,7 +162,11 @@ impl NonceSearchProgress {
                 } else if eta_secs < 3600.0 {
                     format!("{:.1}m {:.0}s", eta_secs / 60.0, eta_secs % 60.0)
                 } else {
-                    format!("{:.1}h {:.0}m", eta_secs / 3600.0, (eta_secs % 3600.0) / 60.0)
+                    format!(
+                        "{:.1}h {:.0}m",
+                        eta_secs / 3600.0,
+                        (eta_secs % 3600.0) / 60.0
+                    )
                 };
                 pb.set_message(format!(
                     "ETA: {eta_str} @ {:.2} KH/s, {:.1}% done",
@@ -169,7 +174,9 @@ impl NonceSearchProgress {
                     (nonce as f64 / self.expected_attempts as f64) * 100.0
                 ));
             } else {
-                println!("  Tried {nonce} hashes... ({avg_hash_rate:.2} hash/s)");
+                println!(
+                    "  Tried {nonce} hashes... ({avg_hash_rate:.2} hash/s)"
+                );
             }
             self.last_update = nonce;
         }
@@ -195,9 +202,13 @@ impl NonceSearchProgress {
             nonce as f64
         };
         if let Some(pb) = &self.progress_bar {
-            pb.finish_with_message(format!("Found flow_id {flow_id} after {nonce} hashes!"));
+            pb.finish_with_message(format!(
+                "Found flow_id {flow_id} after {nonce} hashes!"
+            ));
         } else {
-            println!("  Found valid nonce {nonce} -> flow_id {flow_id} after {nonce} hashes.");
+            println!(
+                "  Found valid nonce {nonce} -> flow_id {flow_id} after {nonce} hashes."
+            );
         }
         println!("  Average hash rate: {hash_rate:.2} hashes/sec");
     }

@@ -1,3 +1,4 @@
+use crate::utils::NonceSearchProgress;
 use bitcoin::{
     Amount, PublicKey, Transaction, XOnlyPublicKey,
     blockdata::script::{Builder, ScriptBuf},
@@ -16,7 +17,6 @@ use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
-use crate::utils::NonceSearchProgress;
 
 /// F1 threshold: x must be > 100
 pub const F1_THRESHOLD: u32 = 100;
@@ -84,10 +84,7 @@ pub fn create_toy_sighash_message(
 }
 
 /// Calculate H(x||nonce)|_B => flow_id
-pub fn calculate_flow_id(
-    input: u32,
-    nonce: u64,
-) -> u32 {
+pub fn calculate_flow_id(input: u32, nonce: u64) -> u32 {
     let mut hasher = Hasher::new();
     hasher.update(&input.to_le_bytes());
     hasher.update(&nonce.to_le_bytes());

@@ -150,7 +150,7 @@ fn main() -> anyhow::Result<()> {
     // Signer's P2WPKH address.  The instructions ensured the user sends that.
     let funding_value_sat = REQUIRED_AMOUNT_SAT;
 
-    let (nonce, flow_id, _hash) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
+    let (nonce, flow_id) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
         .expect("nonce search should succeed quickly");
 
     println!(

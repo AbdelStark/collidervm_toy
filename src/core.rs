@@ -87,9 +87,7 @@ pub fn create_toy_sighash_message(
 pub fn calculate_flow_id(
     input: u32,
     nonce: u64,
-    b_bits: usize,
-    l_bits: usize,
-) -> Option<(u32, [u8; 32])> {
+) -> u32 {
     let mut hasher = Hasher::new();
     hasher.update(&input.to_le_bytes());
     hasher.update(&nonce.to_le_bytes());
@@ -99,19 +97,7 @@ pub fn calculate_flow_id(
     fourb.copy_from_slice(&hash.as_bytes()[0..4]);
     let hash_u32 = u32::from_le_bytes(fourb);
 
-    let mask_b = if b_bits >= 32 {
-        u32::MAX
-    } else {
-        (1u32 << b_bits) - 1
-    };
-    let prefix_b = hash_u32 & mask_b;
-
-    let max_flow_id = (1u64 << l_bits) as u32;
-    if prefix_b < max_flow_id {
-        Some((prefix_b, hash.as_bytes()[0..32].try_into().unwrap()))
-    } else {
-        None
-    }
+    hash_u32
 }
 
 /// Finds a valid nonce `r` for a given input `x` such that `H(x, r)|_B` falls within the set `D`. (Off-chain logic)
@@ -131,7 +117,7 @@ pub fn find_valid_nonce(
     input: u32,
     b_bits: usize,
     l_bits: usize,
-) -> Result<(u64, u32, [u8; 32]), String> {
+) -> Result<(u64, u32), String> {
     let mut nonce: u64 = 0;
 
     // Calculate expected number of attempts (2^(B-L)) for progress reporting
@@ -149,32 +135,37 @@ pub fn find_valid_nonce(
 
     let mut progress = NonceSearchProgress::new(expected_attempts);
 
+    let max_flow_id = (1u64 << l_bits) as u32;
+    let mask_b = if b_bits >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << b_bits) - 1
+    };
+
     loop {
-        // Check if the current nonce yields a valid flow ID
-        match calculate_flow_id(input, nonce, b_bits, l_bits) {
-            Some((flow_id, hash)) => {
-                // Found a nonce `r` such that H(x, r)|_B = d ∈ D
-                progress.success(flow_id, nonce);
+        // Always get the prefix and hash
+        let hash = calculate_flow_id(input, nonce);
+        let prefix_b = hash & mask_b;
+        if prefix_b < max_flow_id {
+            // Found a nonce `r` such that H(x, r)|_B = d ∈ D
+            progress.success(prefix_b, nonce);
+            return Ok((nonce, prefix_b));
+        } else {
+            // Hash prefix was outside the valid range [0, 2^L - 1], try next nonce
+            progress.update(nonce);
 
-                return Ok((nonce, flow_id, hash));
-            }
-            None => {
-                // Hash prefix was outside the valid range [0, 2^L - 1], try next nonce
-                progress.update(nonce);
+            // Increment nonce, checking for overflow
+            nonce = nonce.checked_add(1).ok_or_else(|| {
+                "Nonce overflowed u64::MAX while searching".to_string()
+            })?;
 
-                // Increment nonce, checking for overflow
-                nonce = nonce.checked_add(1).ok_or_else(|| {
-                    "Nonce overflowed u64::MAX while searching".to_string()
-                })?;
-
-                // Safety break after excessive attempts (e.g., 100x expected work)
-                // This prevents infinite loops in case of configuration errors.
-                if nonce > expected_attempts.saturating_mul(100) {
-                    progress.failure();
-                    return Err(format!(
-                        "Could not find a valid nonce after {nonce} attempts (expected ~{expected_attempts})",
-                    ));
-                }
+            // Safety break after excessive attempts (e.g., 100x expected work)
+            // This prevents infinite loops in case of configuration errors.
+            if nonce > expected_attempts.saturating_mul(100) {
+                progress.failure();
+                return Err(format!(
+                    "Could not find a valid nonce after {nonce} attempts (expected ~{expected_attempts})",
+                ));
             }
         }
     }

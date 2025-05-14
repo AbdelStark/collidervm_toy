@@ -339,7 +339,7 @@ mod tests {
         const B: usize = 16;
         let x = 123;
 
-        let (nonce, flow_id, _hash) = find_valid_nonce(x, B, L).unwrap();
+        let (nonce, flow_id) = find_valid_nonce(x, B, L).unwrap();
         let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B);
         let receiver_addr =
             Address::from_str("bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6")

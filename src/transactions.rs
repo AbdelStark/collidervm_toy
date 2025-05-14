@@ -1,9 +1,11 @@
 use anyhow;
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
+use bitcoin::transaction::Version;
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, ScriptBuf,
-    Sequence, TapLeafHash, TapSighashType, TxIn, TxOut, Witness, absolute,
+    Sequence, TapLeafHash, TapSighashType, Transaction, TxIn, TxOut, Witness,
+    absolute,
 };
 use bitcoin::{EcdsaSighashType, hashes::Hash};
 use bitcoin::{
@@ -27,12 +29,12 @@ pub fn create_and_sign_tx_f1(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
     sk_keypair: &Keypair,
-    network: Network,
-    funding_outpoint: OutPoint,
-    funding_value_sat: u64,
+    network: &Network,
+    funding_outpoint: &OutPoint,
+    funding_value_sat: &u64,
     flow_id_prefix: &[u8],
-    fee_rate: u64,
-) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
+    fee_rate: &u64,
+) -> anyhow::Result<(Transaction, ScriptBuf, TaprootSpendInfo)> {
     // ── build F1 locking script ─────────────────────────────────────────
     let pk_signer = sk_keypair.public_key();
     let lock = build_script_f1_blake3_locked(
@@ -49,18 +51,18 @@ pub fn create_and_sign_tx_f1(
         .finalize(secp, x_only_pk)
         .unwrap();
 
-    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
+    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), *network);
 
-    let fee_f1 = estimate_fee_vbytes(155, fee_rate); // ~1 input + 1 output
+    let fee_f1 = estimate_fee_vbytes(155, *fee_rate); // ~1 input + 1 output
     let f1_output_value = funding_value_sat
         .checked_sub(fee_f1)
         .expect("funding not sufficient for fee");
 
-    let mut tx_f1 = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
+    let mut tx_f1 = Transaction {
+        version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
         input: vec![TxIn {
-            previous_output: funding_outpoint,
+            previous_output: *funding_outpoint,
             script_sig: ScriptBuf::new(),
             sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
             witness: Witness::new(),
@@ -76,7 +78,7 @@ pub fn create_and_sign_tx_f1(
         &CompressedPublicKey::try_from(bitcoin::PublicKey::new(
             sk_keypair.public_key(),
         ))?,
-        network,
+        *network,
     );
     let signer_pkh = signer_addr
         .witness_program()
@@ -90,7 +92,7 @@ pub fn create_and_sign_tx_f1(
     let sighash = sighash_cache.p2wsh_signature_hash(
         0,
         &script_code,
-        Amount::from_sat(funding_value_sat),
+        Amount::from_sat(*funding_value_sat),
         EcdsaSighashType::All,
     )?;
     let sig = secp.sign_ecdsa(
@@ -113,16 +115,16 @@ pub fn create_and_sign_tx_f2(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
     sk_keypair: &Keypair,
-    network: Network,
-    tx_f1: &bitcoin::Transaction,
-    f1_output_value: u64,
+    network: &Network,
+    tx_f1: &Transaction,
+    f1_output_value: &u64,
     f1_lock: &ScriptBuf,
     f1_spend_info: &TaprootSpendInfo,
     flow_id_prefix: &[u8],
-    fee_rate: u64,
-    x: u32,
-    nonce: u64,
-) -> anyhow::Result<(bitcoin::Transaction, ScriptBuf, TaprootSpendInfo)> {
+    fee_rate: &u64,
+    x: &u32,
+    nonce: &u64,
+) -> anyhow::Result<(Transaction, ScriptBuf, TaprootSpendInfo)> {
     // ── build F2 locking script & Taproot branch ────────────────────────
     let pk_signer = sk_keypair.public_key();
     let f2_lock = build_script_f2_blake3_locked(
@@ -136,16 +138,16 @@ pub fn create_and_sign_tx_f2(
         .expect("valid leaf")
         .finalize(secp, x_only_pk)
         .unwrap();
-    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), network);
+    let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), *network);
 
     // Now the tx vsize is about 17093.
-    let fee_f2 = estimate_fee_vbytes(17093, fee_rate); // 1 input P2TR + 1 output
+    let fee_f2 = estimate_fee_vbytes(17093, *fee_rate); // 1 input P2TR + 1 output
     let f2_output_value = f1_output_value
         .checked_sub(fee_f2)
         .expect("f1 output too small for f2 fee");
 
-    let mut tx_f2 = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
+    let mut tx_f2 = Transaction {
+        version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint {
@@ -211,22 +213,22 @@ pub fn create_and_sign_tx_f2(
 pub fn create_and_sign_spending_tx(
     secp: &Secp256k1<secp256k1::All>,
     sk_keypair: &Keypair,
-    tx_f2: &bitcoin::Transaction,
-    f2_output_value: u64,
+    tx_f2: &Transaction,
+    f2_output_value: &u64,
     receiver_addr: &Address,
     f2_lock: &ScriptBuf,
     f2_spend_info: &TaprootSpendInfo,
-    fee_rate: u64,
-    x: u32,
-    nonce: u64,
-) -> anyhow::Result<bitcoin::Transaction> {
-    let fee_spending_tx = estimate_fee_vbytes(17082, fee_rate); // 1 input P2TR + 1 output
+    fee_rate: &u64,
+    x: &u32,
+    nonce: &u64,
+) -> anyhow::Result<Transaction> {
+    let fee_spending_tx = estimate_fee_vbytes(17082, *fee_rate); // 1 input P2TR + 1 output
     let spending_output_value = f2_output_value
         .checked_sub(fee_spending_tx)
         .expect("f2 output too small for spending tx");
 
-    let mut spending_tx = bitcoin::Transaction {
-        version: bitcoin::transaction::Version::TWO,
+    let mut spending_tx = Transaction {
+        version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint {
@@ -290,6 +292,7 @@ pub fn create_and_sign_spending_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Transaction;
     use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Txid;
@@ -321,6 +324,7 @@ mod tests {
     }
 
     #[fixture]
+    #[once]
     fn tx_context() -> TxContext {
         let secp = Secp256k1::new();
         let sk_keypair = Keypair::new(&secp, &mut thread_rng());
@@ -339,7 +343,7 @@ mod tests {
         const B: usize = 16;
         let x = 123;
 
-        let (nonce, flow_id, _hash) = find_valid_nonce(x, B, L).unwrap();
+        let (nonce, flow_id) = find_valid_nonce(x, B, L).unwrap();
         let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B);
         let receiver_addr =
             Address::from_str("bcrt1qz3fps2lxvrp5rqj8ucsqrzjx2c3md9gawqr3l6")
@@ -363,8 +367,15 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn test_e2e_valid_input(tx_context: TxContext) -> anyhow::Result<()> {
+    #[derive(Debug, Clone)]
+    struct TxFixture {
+        tx: Transaction,
+        prev_lock: ScriptBuf,
+        prev_spend_info: TaprootSpendInfo,
+    }
+
+    #[fixture]
+    fn f1_tx_fixture(tx_context: &TxContext) -> TxFixture {
         let TxContext {
             secp,
             sk_keypair,
@@ -372,52 +383,120 @@ mod tests {
             funding_outpoint,
             funding_value_sat,
             fee_rate,
-            l: _,
+            b,
+            flow_id_prefix,
+            ..
+        } = tx_context;
+
+        let (tx, prev_lock, prev_spend_info) = create_and_sign_tx_f1(
+            *b,
+            secp,
+            sk_keypair,
+            network,
+            funding_outpoint,
+            funding_value_sat,
+            flow_id_prefix,
+            fee_rate,
+        )
+        .unwrap();
+
+        TxFixture {
+            tx,
+            prev_lock,
+            prev_spend_info,
+        }
+    }
+
+    #[fixture]
+    fn f2_tx_fixture(
+        tx_context: &TxContext,
+        f1_tx_fixture: TxFixture,
+    ) -> TxFixture {
+        let TxContext {
+            secp,
+            sk_keypair,
+            network,
+            fee_rate,
             b,
             x,
             nonce,
             flow_id_prefix,
-            receiver_addr,
+            ..
         } = tx_context;
-        // F1 tx
-        let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
-            b,
-            &secp,
-            &sk_keypair,
+
+        let TxFixture {
+            tx: tx_f1,
+            prev_lock: f1_lock,
+            prev_spend_info: f1_spend_info,
+        } = &f1_tx_fixture;
+
+        let (tx, prev_lock, prev_spend_info) = create_and_sign_tx_f2(
+            *b,
+            secp,
+            sk_keypair,
             network,
-            funding_outpoint,
-            funding_value_sat,
-            &flow_id_prefix,
-            fee_rate,
-        )?;
-        // F2 tx
-        let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
-            b,
-            &secp,
-            &sk_keypair,
-            network,
-            &tx_f1,
-            tx_f1.output[0].value.to_sat(),
-            &f1_lock,
-            &f1_spend_info,
-            &flow_id_prefix,
+            tx_f1,
+            &tx_f1.output[0].value.to_sat(),
+            f1_lock,
+            f1_spend_info,
+            flow_id_prefix,
             fee_rate,
             x,
             nonce,
-        )?;
-        // Spending tx
-        let spending_tx = create_and_sign_spending_tx(
-            &secp,
-            &sk_keypair,
-            &tx_f2,
-            tx_f2.output[0].value.to_sat(),
-            &receiver_addr,
-            &f2_lock,
-            &f2_spend_info,
+        )
+        .unwrap();
+
+        TxFixture {
+            tx,
+            prev_lock,
+            prev_spend_info,
+        }
+    }
+
+    #[fixture]
+    fn spending_tx(
+        tx_context: &TxContext,
+        f2_tx_fixture: TxFixture,
+    ) -> Transaction {
+        let TxContext {
+            secp,
+            sk_keypair,
             fee_rate,
             x,
             nonce,
-        )?;
+            receiver_addr,
+            ..
+        } = tx_context;
+
+        let TxFixture {
+            tx: tx_f2,
+            prev_lock: f2_lock,
+            prev_spend_info: f2_spend_info,
+        } = &f2_tx_fixture;
+
+        create_and_sign_spending_tx(
+            secp,
+            sk_keypair,
+            tx_f2,
+            &tx_f2.output[0].value.to_sat(),
+            receiver_addr,
+            f2_lock,
+            f2_spend_info,
+            fee_rate,
+            x,
+            nonce,
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    fn test_e2e_valid_input(
+        f1_tx_fixture: TxFixture,
+        f2_tx_fixture: TxFixture,
+        spending_tx: Transaction,
+    ) -> anyhow::Result<()> {
+        let TxFixture { tx: tx_f1, .. } = f1_tx_fixture;
+        let TxFixture { tx: tx_f2, .. } = f2_tx_fixture;
 
         // --- Dry run F2 script logic ---
         let exec_info_f2 = dry_run_taproot_input(&tx_f2, 0, &tx_f1.output);
@@ -439,58 +518,39 @@ mod tests {
     }
 
     #[rstest]
-    fn test_e2e_invalid_input(tx_context: TxContext) -> anyhow::Result<()> {
+    fn test_e2e_invalid_input(
+        tx_context: &TxContext,
+        f1_tx_fixture: TxFixture,
+        f2_tx_fixture: TxFixture,
+    ) -> anyhow::Result<()> {
         let TxContext {
             secp,
             sk_keypair,
-            network,
-            funding_outpoint,
-            funding_value_sat,
             fee_rate,
-            l: _,
-            b,
             x,
             nonce,
-            flow_id_prefix,
             receiver_addr,
+            ..
         } = tx_context;
-        // F1 tx
-        let (tx_f1, f1_lock, f1_spend_info) = create_and_sign_tx_f1(
-            b,
-            &secp,
-            &sk_keypair,
-            network,
-            funding_outpoint,
-            funding_value_sat,
-            &flow_id_prefix,
-            fee_rate,
-        )?;
-        // F2 tx
-        let (tx_f2, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
-            b,
-            &secp,
-            &sk_keypair,
-            network,
-            &tx_f1,
-            tx_f1.output[0].value.to_sat(),
-            &f1_lock,
-            &f1_spend_info,
-            &flow_id_prefix,
-            fee_rate,
-            x,
-            nonce,
-        )?;
-        // Spending tx
+
+        let TxFixture { tx: tx_f1, .. } = f1_tx_fixture;
+        let TxFixture {
+            tx: tx_f2,
+            prev_lock: f2_lock,
+            prev_spend_info: f2_spend_info,
+        } = f2_tx_fixture;
+
+        // Spending tx with invalid x
         let spending_tx = create_and_sign_spending_tx(
-            &secp,
-            &sk_keypair,
+            secp,
+            sk_keypair,
             &tx_f2,
-            tx_f2.output[0].value.to_sat(),
-            &receiver_addr,
+            &tx_f2.output[0].value.to_sat(),
+            receiver_addr,
             &f2_lock,
             &f2_spend_info,
             fee_rate,
-            x + 1, // Invalid x
+            &(x + 1), // Invalid x
             nonce,
         )?;
 

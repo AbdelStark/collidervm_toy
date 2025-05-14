@@ -150,7 +150,7 @@ fn main() -> anyhow::Result<()> {
     // Signer's P2WPKH address.  The instructions ensured the user sends that.
     let funding_value_sat = REQUIRED_AMOUNT_SAT;
 
-    let (nonce, flow_id, _hash) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
+    let (nonce, flow_id) = find_valid_nonce(args.x, B_PARAM, L_PARAM)
         .expect("nonce search should succeed quickly");
 
     println!(
@@ -165,26 +165,26 @@ fn main() -> anyhow::Result<()> {
         B_PARAM,
         &secp,
         &sk_keypair,
-        network,
-        funding_outpoint,
-        funding_value_sat,
+        &network,
+        &funding_outpoint,
+        &funding_value_sat,
         &flow_id_prefix,
-        args.fee_rate,
+        &args.fee_rate,
     )?;
 
     let (f2_tx, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         B_PARAM,
         &secp,
         &sk_keypair,
-        network,
+        &network,
         &f1_tx,
-        f1_tx.output[0].value.to_sat(),
+        &f1_tx.output[0].value.to_sat(),
         &f1_lock,
         &f1_spend_info,
         &flow_id_prefix,
-        args.fee_rate,
-        args.x,
-        nonce,
+        &args.fee_rate,
+        &args.x,
+        &nonce,
     )?;
 
     let receiver_addr =
@@ -194,13 +194,13 @@ fn main() -> anyhow::Result<()> {
         &secp,
         &sk_keypair,
         &f2_tx,
-        f2_tx.output[0].value.to_sat(),
+        &f2_tx.output[0].value.to_sat(),
         &receiver_addr,
         &f2_lock,
         &f2_spend_info,
-        args.fee_rate,
-        args.x,
-        nonce,
+        &args.fee_rate,
+        &args.x,
+        &nonce,
     )?;
 
     let f1_tx_path = write_transaction_to_file(&f1_tx, &args.output_dir, "f1")?;

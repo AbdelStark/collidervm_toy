@@ -92,9 +92,8 @@ pub fn calculate_flow_id(input: u32, nonce: u64) -> u32 {
 
     let mut fourb = [0u8; 4];
     fourb.copy_from_slice(&hash.as_bytes()[0..4]);
-    let hash_u32 = u32::from_le_bytes(fourb);
 
-    hash_u32
+    u32::from_le_bytes(fourb)
 }
 
 /// Finds a valid nonce `r` for a given input `x` such that `H(x, r)|_B` falls within the set `D`. (Off-chain logic)

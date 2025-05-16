@@ -172,13 +172,15 @@ fn main() -> anyhow::Result<()> {
         &args.fee_rate,
     )?;
 
+    let f1_output_value = f1_tx.output[0].value.to_sat();
+
     let (f2_tx, f2_lock, f2_spend_info) = create_and_sign_tx_f2(
         B_PARAM,
         &secp,
         &sk_keypair,
         &network,
         &f1_tx,
-        &f1_tx.output[0].value.to_sat(),
+        &f1_output_value,
         &f1_lock,
         &f1_spend_info,
         &flow_id_prefix,
@@ -190,11 +192,13 @@ fn main() -> anyhow::Result<()> {
     let receiver_addr =
         Address::from_str(&args.receiver)?.require_network(network)?;
 
+    let f2_output_value = f2_tx.output[0].value.to_sat();
+
     let spending_tx = create_and_sign_spending_tx(
         &secp,
         &sk_keypair,
         &f2_tx,
-        &f2_tx.output[0].value.to_sat(),
+        &f2_output_value,
         &receiver_addr,
         &f2_lock,
         &f2_spend_info,

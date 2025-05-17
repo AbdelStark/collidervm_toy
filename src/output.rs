@@ -5,13 +5,13 @@ use std::path::Path;
 
 #[derive(Serialize)]
 pub struct KeyInfo {
-    pub signer: KeyPair,
+    pub signers: Vec<KeyPair>,
     // pub operator: KeyPair,
 }
 
 #[derive(Serialize)]
 pub struct KeyPair {
-    pub address: String,
+    //pub address: String,
     pub wif: String,
 }
 

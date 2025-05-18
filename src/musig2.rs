@@ -1,7 +1,6 @@
 use musig2::{
     AggNonce, KeyAggContext, LiftedSignature, PartialSignature, PubNonce,
     SecNonce, aggregate_partial_signatures,
-    errors::{SigningError, VerifyError},
     secp::{MaybeScalar, Point},
     secp256k1::{PublicKey, Secp256k1, SecretKey},
     sign_partial,
@@ -46,21 +45,21 @@ pub fn gen_partial_signature(
     sighash: impl AsRef<[u8]>,
     secret_nonce: &SecNonce,
     aggregated_nonce: &AggNonce,
-) -> Result<MaybeScalar, SigningError> {
+) -> anyhow::Result<MaybeScalar> {
     let pubkeys: Vec<Point> = Vec::from_iter(
         n_of_n_public_keys
             .iter()
             .map(|&public_key| public_key.into()),
-    ); // TODO: The tests will reveal whether this conversion works as expected.
-    let key_agg_ctx = KeyAggContext::new(pubkeys).unwrap();
+    );
+    let key_agg_ctx = KeyAggContext::new(pubkeys)?;
 
-    sign_partial(
+    Ok(sign_partial(
         &key_agg_ctx,
         *secret_key,
         secret_nonce.clone(),
         aggregated_nonce,
         sighash,
-    )
+    )?)
 }
 
 pub fn gen_aggregated_signature(
@@ -68,35 +67,35 @@ pub fn gen_aggregated_signature(
     sighash: impl AsRef<[u8]>,
     aggregated_nonce: &AggNonce,
     partial_signatures: Vec<PartialSignature>,
-) -> Result<LiftedSignature, VerifyError> {
+) -> anyhow::Result<LiftedSignature> {
     let pubkeys: Vec<Point> = Vec::from_iter(
         n_of_n_public_keys
             .iter()
             .map(|&public_key| public_key.into()),
     );
-    let key_agg_ctx = KeyAggContext::new(pubkeys).unwrap();
+    let key_agg_ctx = KeyAggContext::new(pubkeys)?;
 
-    aggregate_partial_signatures(
+    Ok(aggregate_partial_signatures(
         &key_agg_ctx,
         aggregated_nonce,
         partial_signatures,
         sighash,
-    )
+    )?)
 }
 
-pub fn re_export<F: Serialize, T: DeserializeOwned>(from: F) -> T {
+pub fn inner_from<F: Serialize, T: DeserializeOwned>(from: F) -> T {
     let value = serde_json::to_value(&from).unwrap();
     serde_json::from_value(value).unwrap()
 }
 
-pub fn simulate_musig(
+pub fn simulate_musig2(
     keys: &[(SecretKey, PublicKey)],
     message: &bitcoin::secp256k1::Message,
-) -> LiftedSignature {
+) -> anyhow::Result<LiftedSignature> {
     let message = message.as_ref();
     let public_keys: Vec<_> = keys.iter().map(|key| key.1).collect();
 
-    let ctx = musig2::KeyAggContext::new(public_keys.clone()).unwrap();
+    let ctx = musig2::KeyAggContext::new(public_keys.clone())?;
     let agg_public_keys: musig2::secp256k1::PublicKey = ctx.aggregated_pubkey();
 
     let nonces = keys
@@ -135,7 +134,6 @@ pub fn simulate_musig(
         &agg_nonce,
         partial_sigs,
     )
-    .unwrap()
 }
 #[cfg(test)]
 mod tests {
@@ -154,7 +152,7 @@ mod tests {
         let agg_public_keys: musig2::secp256k1::PublicKey =
             ctx.aggregated_pubkey();
 
-        let final_signature = simulate_musig(&keys, &message);
+        let final_signature = simulate_musig2(&keys, &message).unwrap();
 
         musig2::verify_single(
             agg_public_keys,
@@ -168,8 +166,8 @@ mod tests {
     fn test_wrap_value() {
         let secp = Secp256k1::new();
         let keypair = secp.generate_keypair(&mut rand::thread_rng());
-        let keypair_sk: bitcoin::secp256k1::SecretKey = re_export(keypair.0);
-        let keypair_sk_sk: SecretKey = re_export(keypair_sk);
+        let keypair_sk: bitcoin::secp256k1::SecretKey = inner_from(keypair.0);
+        let keypair_sk_sk: SecretKey = inner_from(keypair_sk);
         assert_eq!(keypair_sk_sk, keypair.0);
     }
 }

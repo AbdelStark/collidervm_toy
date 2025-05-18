@@ -23,7 +23,7 @@ use secp256k1::{PublicKey, XOnlyPublicKey};
 
 /// Creates and signs tx_f1, spending the funding UTXO to the F1 Taproot address.
 #[allow(clippy::too_many_arguments)]
-pub fn create_and_sign_tx_f1(
+pub fn create_f1_tx(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
     pk_signer: &PublicKey,
@@ -41,7 +41,6 @@ pub fn create_and_sign_tx_f1(
     Message,
 )> {
     // ── build F1 locking script ─────────────────────────────────────────
-    //let pk_signer = sk_keypair.public_key();
     let lock = build_script_f1_blake3_locked(
         &bitcoin::PublicKey::new(*pk_signer),
         flow_id_prefix,
@@ -78,12 +77,8 @@ pub fn create_and_sign_tx_f1(
         }],
     };
 
-    //-------------- code is redundant ----------------
     let xonly_pk = XOnlyPublicKey::from(*pk_signer);
-    let funding_script = bitcoin::script::Builder::new()
-        .push_x_only_key(&xonly_pk)
-        .push_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
-        .into_script();
+    let funding_script = get_funding_script(&x_only_pk);
 
     let leaf_hash =
         TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
@@ -97,12 +92,6 @@ pub fn create_and_sign_tx_f1(
     // The scriptPubKey for this Taproot output and the address (for funding):
     let funding_address =
         Address::p2tr_tweaked(funding_spend_info.output_key(), *network);
-    println!(
-        "Re-calculate funding address: {:?}, {}",
-        funding_address,
-        hex::encode(funding_address.script_pubkey())
-    );
-    //---------------------
 
     let mut cache = SighashCache::new(&mut tx_f1);
     let sighash = cache.taproot_script_spend_signature_hash(
@@ -126,13 +115,19 @@ pub fn create_and_sign_tx_f1(
         msg,
     ))
 }
-pub fn create_and_sign_tx_f1_finish(
+
+pub fn get_funding_script(xonly_pk: &XOnlyPublicKey) -> ScriptBuf {
+    bitcoin::script::Builder::new()
+        .push_x_only_key(xonly_pk)
+        .push_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
+        .into_script()
+}
+pub fn finalize_f1_tx(
+    tx: &mut Transaction,
     sig: LiftedSignature,
     spend_info: &TaprootSpendInfo,
     funding_script: &ScriptBuf,
-    tx: &mut Transaction,
 ) {
-    // === Step 4: Assemble witness ===
     let control_block = spend_info
         .control_block(&(funding_script.clone(), LeafVersion::TapScript))
         .unwrap();
@@ -146,7 +141,7 @@ pub fn create_and_sign_tx_f1_finish(
 
 /// Creates and signs tx_f2, spending the F1 output to the F2 Taproot address.
 #[allow(clippy::too_many_arguments)]
-pub fn create_and_sign_tx_f2(
+pub fn create_f2_tx(
     b_bits: usize,
     secp: &Secp256k1<secp256k1::All>,
     pk_signer: &PublicKey,
@@ -158,7 +153,6 @@ pub fn create_and_sign_tx_f2(
     fee_rate: &u64,
 ) -> anyhow::Result<(Transaction, ScriptBuf, TaprootSpendInfo, Message)> {
     // ── build F2 locking script & Taproot branch ────────────────────────
-    //let pk_signer = sk_keypair.public_key();
     let f2_lock = build_script_f2_blake3_locked(
         &bitcoin::PublicKey::new(*pk_signer),
         flow_id_prefix,
@@ -200,37 +194,35 @@ pub fn create_and_sign_tx_f2(
     let leaf_hash = TapLeafHash::from_script(f1_lock, LeafVersion::TapScript);
 
     let mut cache = SighashCache::new(&mut tx_f2);
-    let sighash = cache
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[f1_tx.output[0].clone()]),
-            leaf_hash,
-            TapSighashType::Default,
-        )
-        .unwrap();
+    let sighash = cache.taproot_script_spend_signature_hash(
+        0,
+        &Prevouts::All(&[f1_tx.output[0].clone()]),
+        leaf_hash,
+        TapSighashType::Default,
+    )?;
 
     let msg = Message::from_digest_slice(&sighash[..])?;
     Ok((tx_f2, f2_lock, spend_info, msg))
 }
 
-pub fn create_and_sign_tx_f2_finish(
-    sig: LiftedSignature,
-    f1_spend_info: &TaprootSpendInfo,
-    f1_lock: &ScriptBuf,
+pub fn finalize_f2_tx(
     tx: &mut Transaction,
+    sig: LiftedSignature,
+    spend_info: &TaprootSpendInfo,
+    lock: &ScriptBuf,
     x: &u32,
     nonce: &u64,
-) {
+) -> anyhow::Result<()> {
     // Assemble witness
-    let control_block = f1_spend_info
-        .control_block(&(f1_lock.clone(), LeafVersion::TapScript))
+    let control_block = spend_info
+        .control_block(&(lock.clone(), LeafVersion::TapScript))
         .unwrap();
 
     // Encode input_value || nonce
     let message = [
         x.to_le_bytes(),
-        nonce.to_le_bytes()[0..4].try_into().unwrap(),
-        nonce.to_le_bytes()[4..8].try_into().unwrap(),
+        nonce.to_le_bytes()[0..4].try_into()?,
+        nonce.to_le_bytes()[4..8].try_into()?,
     ]
     .concat();
 
@@ -240,15 +232,16 @@ pub fn create_and_sign_tx_f2_finish(
     }
 
     witness.push(sig.serialize());
-    witness.push(f1_lock.to_bytes());
+    witness.push(lock.to_bytes());
     witness.push(control_block.serialize());
 
     tx.input[0].witness = witness;
+    Ok(())
 }
 
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.
 #[allow(clippy::too_many_arguments)]
-pub fn create_and_sign_spending_tx(
+pub fn create_spending_tx(
     f2_tx: &Transaction,
     f2_output_value: &u64,
     receiver_addr: &Address,
@@ -295,64 +288,28 @@ pub fn create_and_sign_spending_tx(
     Ok((spending_tx, msg))
 }
 
-pub fn create_and_sign_spending_tx_finish(
-    sig: LiftedSignature,
-    f2_spend_info: &TaprootSpendInfo,
-    f2_lock: &ScriptBuf,
-    tx: &mut Transaction,
-    x: &u32,
-    nonce: &u64,
-) {
-    // Assemble witness
-    let control_block = f2_spend_info
-        .control_block(&(f2_lock.clone(), LeafVersion::TapScript))
-        .unwrap();
-
-    // Encode input_value || nonce
-    let message = [
-        x.to_le_bytes(),
-        nonce.to_le_bytes()[0..4].try_into().unwrap(),
-        nonce.to_le_bytes()[4..8].try_into().unwrap(),
-    ]
-    .concat();
-
-    let mut witness = Witness::new();
-    for limb in blake3_message_to_limbs(&message, 4) {
-        witness.push(encode_scriptnum(limb.into()));
-    }
-
-    witness.push(sig.serialize());
-    witness.push(f2_lock.to_bytes());
-    witness.push(control_block.serialize());
-
-    tx.input[0].witness = witness;
-}
-
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::find_valid_nonce;
+    use crate::core::flow_id_to_prefix_bytes;
+    use crate::musig2::{generate_keys, inner_from, simulate_musig2};
     use Transaction;
     use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Txid;
     use bitcoin::hashes::Hash;
-    use bitcoin::secp256k1::Keypair;
     use bitcoin::secp256k1::Secp256k1;
-    use bitcoin::secp256k1::rand::thread_rng;
     use bitvm::dry_run_taproot_input;
     use rstest::*;
     use std::str::FromStr;
-
-    use crate::core::find_valid_nonce;
-    use crate::core::flow_id_to_prefix_bytes;
-    use crate::musig2::{generate_keys, re_export};
 
     #[allow(dead_code)]
     #[derive(Debug, Clone)]
     struct TxContext {
         secp: Secp256k1<secp256k1::All>,
-        sk_keypair: Keypair,
+        sk_signers:
+            [(musig2::secp256k1::SecretKey, musig2::secp256k1::PublicKey); 2],
         network: Network,
         funding_outpoint: OutPoint,
         funding_value_sat: u64,
@@ -369,7 +326,7 @@ mod tests {
     #[once]
     fn tx_context() -> TxContext {
         let secp = Secp256k1::new();
-        let sk_keypair = Keypair::new(&secp, &mut thread_rng());
+        let sk_signers = generate_keys::<2>();
 
         let network = Network::Regtest;
 
@@ -395,7 +352,7 @@ mod tests {
 
         TxContext {
             secp,
-            sk_keypair,
+            sk_signers,
             network,
             funding_outpoint,
             funding_value_sat,
@@ -420,7 +377,7 @@ mod tests {
     fn f1_tx_fixture(tx_context: &TxContext) -> TxFixture {
         let TxContext {
             secp,
-            sk_keypair,
+            sk_signers,
             network,
             funding_outpoint,
             funding_value_sat,
@@ -430,19 +387,22 @@ mod tests {
             ..
         } = tx_context;
 
-        let sk_signers = generate_keys::<2>();
+        let pk_signers = sk_signers.iter().map(|key| key.1).collect::<Vec<_>>();
+        let agg_ctx = musig2::KeyAggContext::new(pk_signers).unwrap();
+        let pk_signer: musig2::secp256k1::PublicKey =
+            agg_ctx.aggregated_pubkey();
 
-        let pk_signers = sk_signers
-            .iter()
-            .map(|key| key.1)
-            .collect::<Vec<_>>();
-        let agg_ctx = musig2::KeyAggContext::new(pk_signers)?;
-        let pk_signer: musig2::secp256k1::PublicKey = agg_ctx.aggregated_pubkey();
-
-        let (tx, prev_lock, prev_spend_info, funding_script, f1_spend_info, message) = create_and_sign_tx_f1(
+        let (
+            mut tx,
+            prev_lock,
+            prev_spend_info,
+            funding_script,
+            funding_spend_info,
+            message,
+        ) = create_f1_tx(
             *b,
             secp,
-            &wrap_key(pk_signer),
+            &inner_from(pk_signer),
             network,
             funding_outpoint,
             funding_value_sat,
@@ -450,6 +410,14 @@ mod tests {
             fee_rate,
         )
         .unwrap();
+
+        let final_sig = simulate_musig2(sk_signers, &message).unwrap();
+        finalize_f1_tx(
+            &mut tx,
+            final_sig,
+            &funding_spend_info,
+            &funding_script,
+        );
 
         TxFixture {
             tx,
@@ -465,7 +433,7 @@ mod tests {
     ) -> TxFixture {
         let TxContext {
             secp,
-            sk_keypair,
+            sk_signers,
             network,
             fee_rate,
             b,
@@ -475,28 +443,33 @@ mod tests {
             ..
         } = tx_context;
 
+        let pk_signers = sk_signers.iter().map(|key| key.1).collect::<Vec<_>>();
+        let agg_ctx = musig2::KeyAggContext::new(pk_signers).unwrap();
+        let pk_signer: musig2::secp256k1::PublicKey =
+            agg_ctx.aggregated_pubkey();
+
         let TxFixture {
             tx: tx_f1,
             prev_lock: f1_lock,
             prev_spend_info: f1_spend_info,
+            ..
         } = &f1_tx_fixture;
 
-        let (tx, prev_lock, prev_spend_info) = create_and_sign_tx_f2(
+        let (mut tx, prev_lock, prev_spend_info, message) = create_f2_tx(
             *b,
             secp,
-            sk_keypair,
-            &sk_keypair.public_key(),
+            &inner_from(pk_signer),
             network,
             tx_f1,
             &tx_f1.output[0].value.to_sat(),
             f1_lock,
-            f1_spend_info,
             flow_id_prefix,
             fee_rate,
-            x,
-            nonce,
         )
         .unwrap();
+        let final_sig = simulate_musig2(sk_signers, &message).unwrap();
+        finalize_f2_tx(&mut tx, final_sig, f1_spend_info, f1_lock, x, nonce)
+            .unwrap();
 
         TxFixture {
             tx,
@@ -511,8 +484,7 @@ mod tests {
         f2_tx_fixture: TxFixture,
     ) -> Transaction {
         let TxContext {
-            secp,
-            sk_keypair,
+            sk_signers,
             fee_rate,
             x,
             nonce,
@@ -524,21 +496,21 @@ mod tests {
             tx: tx_f2,
             prev_lock: f2_lock,
             prev_spend_info: f2_spend_info,
+            ..
         } = &f2_tx_fixture;
 
-        create_and_sign_spending_tx(
-            secp,
-            sk_keypair,
+        let (mut tx, message) = create_spending_tx(
             tx_f2,
             &tx_f2.output[0].value.to_sat(),
             receiver_addr,
             f2_lock,
-            f2_spend_info,
             fee_rate,
-            x,
-            nonce,
         )
-        .unwrap()
+        .unwrap();
+        let final_sig = simulate_musig2(sk_signers, &message).unwrap();
+        finalize_f2_tx(&mut tx, final_sig, f2_spend_info, f2_lock, x, nonce)
+            .unwrap();
+        tx
     }
 
     #[rstest]
@@ -576,8 +548,7 @@ mod tests {
         f2_tx_fixture: TxFixture,
     ) -> anyhow::Result<()> {
         let TxContext {
-            secp,
-            sk_keypair,
+            sk_signers,
             fee_rate,
             x,
             nonce,
@@ -590,21 +561,28 @@ mod tests {
             tx: tx_f2,
             prev_lock: f2_lock,
             prev_spend_info: f2_spend_info,
+            ..
         } = f2_tx_fixture;
 
         // Spending tx with invalid x
-        let spending_tx = create_and_sign_spending_tx(
-            secp,
-            sk_keypair,
+        let (mut spending_tx, message) = create_spending_tx(
             &tx_f2,
             &tx_f2.output[0].value.to_sat(),
             receiver_addr,
             &f2_lock,
-            &f2_spend_info,
             fee_rate,
-            &(x + 1), // Invalid x
-            nonce,
         )?;
+        let final_sig = simulate_musig2(sk_signers, &message).unwrap();
+        // invalid input value: x+1
+        finalize_f2_tx(
+            &mut spending_tx,
+            final_sig,
+            &f2_spend_info,
+            &f2_lock,
+            &(x + 1),
+            nonce,
+        )
+        .unwrap();
 
         // --- Dry run F2 script logic ---
         let exec_info_f2 = dry_run_taproot_input(&tx_f2, 0, &tx_f1.output);
@@ -625,4 +603,3 @@ mod tests {
         Ok(())
     }
 }
- */

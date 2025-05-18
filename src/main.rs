@@ -18,7 +18,7 @@
 //!       for `F1` (and `F2`) using the existing helpers.
 //!     * constructs and signs **tx_f1** (spends the funding UTXO → P2WSH locked
 //!       by the `F1` program).
-//! 4.  **Online phase** – it then builds and signs **tx_f2**, spending the F1
+//! 4.  **Online phase** – it then builds and signs **f2_tx**, spending the F1
 //!     output with the witness `[sig, flow_id, x, script]`, paying the remaining
 //!     funds to an Operator address.
 //! 5.  Both transactions are written to `f1.tx` and `f2.tx` (raw hex), and all relevant IDs / next steps are printed.
@@ -38,11 +38,10 @@ use bitcoin::{Address, OutPoint, Txid};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
-use collidervm_toy::musig2::{re_export, simulate_musig};
+use collidervm_toy::musig2::{inner_from, simulate_musig2};
 use collidervm_toy::transactions::{
-    create_and_sign_spending_tx, create_and_sign_spending_tx_finish,
-    create_and_sign_tx_f1, create_and_sign_tx_f1_finish, create_and_sign_tx_f2,
-    create_and_sign_tx_f2_finish,
+    create_f1_tx, create_f2_tx, create_spending_tx, finalize_f1_tx,
+    finalize_f2_tx,
 };
 use collidervm_toy::utils::{
     wait_for_confirmation, wrap_network, write_transaction_to_file,
@@ -153,8 +152,9 @@ fn main() -> anyhow::Result<()> {
     } else {
         get_funding_outpoint(
             &rpc_client,
+            &secp,
             network,
-            &re_export(pk_signer),
+            &inner_from(pk_signer),
             REQUIRED_AMOUNT_SAT,
         )
     };
@@ -176,7 +176,6 @@ fn main() -> anyhow::Result<()> {
 
     //let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
     //let pk_keypair = sk_keypair.public_key();
-
     let (
         mut f1_tx,
         f1_lock,
@@ -184,29 +183,29 @@ fn main() -> anyhow::Result<()> {
         funding_script,
         funding_spend_info,
         message,
-    ) = create_and_sign_tx_f1(
+    ) = create_f1_tx(
         B_PARAM,
         &secp,
-        &re_export(pk_signer),
+        &inner_from(pk_signer),
         &network,
         &funding_outpoint,
         &funding_value_sat,
         &flow_id_prefix,
         &args.fee_rate,
     )?;
-    let final_signature = simulate_musig(&sk_signers, &message);
-    create_and_sign_tx_f1_finish(
+    let final_signature = simulate_musig2(&sk_signers, &message)?;
+    finalize_f1_tx(
+        &mut f1_tx,
         final_signature,
         &funding_spend_info,
         &funding_script,
-        &mut f1_tx,
     );
 
     let f1_output_value = f1_tx.output[0].value.to_sat();
-    let (mut f2_tx, f2_lock, f2_spend_info, message) = create_and_sign_tx_f2(
+    let (mut f2_tx, f2_lock, f2_spend_info, message) = create_f2_tx(
         B_PARAM,
         &secp,
-        &re_export(pk_signer),
+        &inner_from(pk_signer),
         &network,
         &f1_tx,
         &f1_output_value,
@@ -214,36 +213,36 @@ fn main() -> anyhow::Result<()> {
         &flow_id_prefix,
         &args.fee_rate,
     )?;
-    let final_signature = simulate_musig(&sk_signers, &message);
-    create_and_sign_tx_f2_finish(
+    let final_signature = simulate_musig2(&sk_signers, &message)?;
+    finalize_f2_tx(
+        &mut f2_tx,
         final_signature,
         &f1_spend_info,
         &f1_lock,
-        &mut f2_tx,
         &args.x,
         &nonce,
-    );
+    )?;
 
     let receiver_addr =
         Address::from_str(&args.receiver)?.require_network(network)?;
 
     let f2_output_value = f2_tx.output[0].value.to_sat();
-    let (mut spending_tx, message) = create_and_sign_spending_tx(
+    let (mut spending_tx, message) = create_spending_tx(
         &f2_tx,
         &f2_output_value,
         &receiver_addr,
         &f2_lock,
         &args.fee_rate,
     )?;
-    let final_signature = simulate_musig(&sk_signers, &message);
-    create_and_sign_spending_tx_finish(
+    let final_signature = simulate_musig2(&sk_signers, &message)?;
+    finalize_f2_tx(
+        &mut spending_tx,
         final_signature,
         &f2_spend_info,
         &f2_lock,
-        &mut spending_tx,
         &args.x,
         &nonce,
-    );
+    )?;
 
     let f1_tx_path = write_transaction_to_file(&f1_tx, &args.output_dir, "f1")?;
     let f2_tx_path = write_transaction_to_file(&f2_tx, &args.output_dir, "f2")?;
@@ -253,7 +252,7 @@ fn main() -> anyhow::Result<()> {
     let signers = sk_signers
         .iter()
         .map(|key| KeyPair {
-            wif: bitcoin::PrivateKey::new(re_export(key.0), network).to_wif(),
+            wif: bitcoin::PrivateKey::new(inner_from(key.0), network).to_wif(),
         })
         .collect::<Vec<_>>();
     let demo_output = DemoOutput {
@@ -321,19 +320,17 @@ fn main() -> anyhow::Result<()> {
 /// create a funding taproot address, and demo the spending tx with musig2
 fn create_funding_taproot_address(
     pubkey: &PublicKey,
+    secp: &Secp256k1<secp256k1::All>,
     network: Network,
 ) -> Address {
-    let secp = Secp256k1::new();
     let xonly_pk = XOnlyPublicKey::from(*pubkey);
-    let leaf_script = bitcoin::script::Builder::new()
-        .push_x_only_key(&xonly_pk)
-        .push_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
-        .into_script();
+    let leaf_script =
+        collidervm_toy::transactions::get_funding_script(&xonly_pk);
 
     let spend_info = TaprootBuilder::new()
         .add_leaf(0, leaf_script.clone())
         .unwrap()
-        .finalize(&secp, xonly_pk)
+        .finalize(secp, xonly_pk)
         .unwrap();
 
     // The scriptPubKey for this Taproot output and the address (for funding):
@@ -341,13 +338,14 @@ fn create_funding_taproot_address(
 }
 
 fn get_funding_outpoint(
-    rpc_client: &bitcoincore_rpc::Client,
+    rpc_client: &Client,
+    secp: &Secp256k1<secp256k1::All>,
     network: Network,
     signer_pubkey: &PublicKey,
     required_amount_sat: u64,
 ) -> bitcoin::OutPoint {
     let funding_address =
-        create_funding_taproot_address(signer_pubkey, network);
+        create_funding_taproot_address(signer_pubkey, secp, network);
     let txid = rpc_client
         .send_to_address(
             &funding_address,
@@ -361,7 +359,6 @@ fn get_funding_outpoint(
         )
         .map_err(|err| panic!("Error: {err}"))
         .unwrap();
-    println!("Funding tx: {txid}");
     wait_for_confirmation(rpc_client, &txid, 1, 60).unwrap();
 
     let confirmed_funding_tx =

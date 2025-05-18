@@ -106,7 +106,7 @@ pub fn create_and_sign_tx_f1(
 
     let mut cache = SighashCache::new(&mut tx_f1);
     let sighash = cache.taproot_script_spend_signature_hash(
-        funding_outpoint.vout as usize,
+        0,
         &Prevouts::All(&[TxOut {
             value: Amount::from_sat(*funding_value_sat),
             script_pubkey: funding_address.script_pubkey(),
@@ -329,7 +329,6 @@ pub fn create_and_sign_spending_tx_finish(
 }
 
 /*
-// FIXME: stephen
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,7 +346,7 @@ mod tests {
 
     use crate::core::find_valid_nonce;
     use crate::core::flow_id_to_prefix_bytes;
-    use crate::musig2::{generate_keys, wrap_key};
+    use crate::musig2::{generate_keys, re_export};
 
     #[allow(dead_code)]
     #[derive(Debug, Clone)]
@@ -626,4 +625,4 @@ mod tests {
         Ok(())
     }
 }
-*/
+ */

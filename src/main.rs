@@ -202,6 +202,7 @@ fn main() -> anyhow::Result<()> {
         &mut f1_tx,
     );
 
+    let f1_output_value = f1_tx.output[0].value.to_sat();
     let (mut f2_tx, f2_lock, f2_spend_info, message) = create_and_sign_tx_f2(
         B_PARAM,
         &secp,
@@ -226,6 +227,7 @@ fn main() -> anyhow::Result<()> {
     let receiver_addr =
         Address::from_str(&args.receiver)?.require_network(network)?;
 
+    let f2_output_value = f2_tx.output[0].value.to_sat();
     let (mut spending_tx, message) = create_and_sign_spending_tx(
         &f2_tx,
         &f2_output_value,

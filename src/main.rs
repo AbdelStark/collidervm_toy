@@ -208,7 +208,7 @@ fn main() -> anyhow::Result<()> {
         &re_export(pk_signer),
         &network,
         &f1_tx,
-        &f1_tx.output[0].value.to_sat(),
+        &f1_output_value,
         &f1_lock,
         &flow_id_prefix,
         &args.fee_rate,
@@ -228,7 +228,7 @@ fn main() -> anyhow::Result<()> {
 
     let (mut spending_tx, message) = create_and_sign_spending_tx(
         &f2_tx,
-        &f2_tx.output[0].value.to_sat(),
+        &f2_output_value,
         &receiver_addr,
         &f2_lock,
         &args.fee_rate,

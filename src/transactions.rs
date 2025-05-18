@@ -151,7 +151,7 @@ pub fn create_and_sign_tx_f2(
     secp: &Secp256k1<secp256k1::All>,
     pk_signer: &PublicKey,
     network: &Network,
-    tx_f1: &Transaction,
+    f1_tx: &Transaction,
     f1_output_value: &u64,
     f1_lock: &ScriptBuf,
     flow_id_prefix: &[u8],
@@ -183,7 +183,7 @@ pub fn create_and_sign_tx_f2(
         lock_time: absolute::LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint {
-                txid: tx_f1.compute_txid(),
+                txid: f1_tx.compute_txid(),
                 vout: 0,
             },
             script_sig: ScriptBuf::new(),
@@ -203,7 +203,7 @@ pub fn create_and_sign_tx_f2(
     let sighash = cache
         .taproot_script_spend_signature_hash(
             0,
-            &Prevouts::All(&[tx_f1.output[0].clone()]),
+            &Prevouts::All(&[f1_tx.output[0].clone()]),
             leaf_hash,
             TapSighashType::Default,
         )
@@ -249,7 +249,7 @@ pub fn create_and_sign_tx_f2_finish(
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_spending_tx(
-    tx_f2: &Transaction,
+    f2_tx: &Transaction,
     f2_output_value: &u64,
     receiver_addr: &Address,
     f2_lock: &ScriptBuf,
@@ -265,7 +265,7 @@ pub fn create_and_sign_spending_tx(
         lock_time: absolute::LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint {
-                txid: tx_f2.compute_txid(),
+                txid: f2_tx.compute_txid(),
                 vout: 0,
             },
             script_sig: ScriptBuf::new(),
@@ -285,7 +285,7 @@ pub fn create_and_sign_spending_tx(
     let sighash = cache
         .taproot_script_spend_signature_hash(
             0,
-            &Prevouts::All(&[tx_f2.output[0].clone()]),
+            &Prevouts::All(&[f2_tx.output[0].clone()]),
             leaf_hash,
             TapSighashType::Default,
         )

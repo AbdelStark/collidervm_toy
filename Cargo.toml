@@ -30,4 +30,3 @@ lto = true
 
 [dev-dependencies]
 rstest = "0.25.0"
-sha2 = "0.10.9"

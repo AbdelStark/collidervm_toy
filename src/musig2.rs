@@ -6,8 +6,6 @@ use musig2::{
     sign_partial,
 };
 use rand::RngCore;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 pub fn generate_keys<const N: usize>() -> [(SecretKey, PublicKey); N] {
     let secp = Secp256k1::new();
@@ -18,13 +16,13 @@ pub fn generate_keys<const N: usize>() -> [(SecretKey, PublicKey); N] {
         .unwrap()
 }
 
-pub fn generate_nonce(
+fn generate_nonce(
     key: &(SecretKey, PublicKey),
     aggregated_pubkey: impl Into<Point>,
     message: impl AsRef<[u8]>,
     signer_index: usize,
 ) -> (SecNonce, PubNonce) {
-    // TODO: add signature for the nonce
+    // TODO: add signature for the nonce if you are use in for production.
     let mut nonce_seed = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut nonce_seed);
 
@@ -39,11 +37,11 @@ pub fn generate_nonce(
     (secnonce, our_public_nonce)
 }
 
-pub fn gen_partial_signature(
-    secret_key: &SecretKey,
+fn gen_partial_signature(
+    seckey: &SecretKey,
     n_of_n_public_keys: Vec<musig2::secp256k1::PublicKey>,
-    sighash: impl AsRef<[u8]>,
-    secret_nonce: &SecNonce,
+    message: impl AsRef<[u8]>,
+    secnonce: &SecNonce,
     aggregated_nonce: &AggNonce,
 ) -> anyhow::Result<MaybeScalar> {
     let pubkeys: Vec<Point> = Vec::from_iter(
@@ -55,16 +53,16 @@ pub fn gen_partial_signature(
 
     Ok(sign_partial(
         &key_agg_ctx,
-        *secret_key,
-        secret_nonce.clone(),
+        *seckey,
+        secnonce.clone(),
         aggregated_nonce,
-        sighash,
+        message,
     )?)
 }
 
-pub fn gen_aggregated_signature(
+fn gen_aggregated_signature(
     n_of_n_public_keys: Vec<musig2::secp256k1::PublicKey>,
-    sighash: impl AsRef<[u8]>,
+    message: impl AsRef<[u8]>,
     aggregated_nonce: &AggNonce,
     partial_signatures: Vec<PartialSignature>,
 ) -> anyhow::Result<LiftedSignature> {
@@ -79,69 +77,65 @@ pub fn gen_aggregated_signature(
         &key_agg_ctx,
         aggregated_nonce,
         partial_signatures,
-        sighash,
+        message,
     )?)
-}
-
-pub fn inner_from<F: Serialize, T: DeserializeOwned>(from: F) -> T {
-    let value = serde_json::to_value(&from).unwrap();
-    serde_json::from_value(value).unwrap()
 }
 
 pub fn simulate_musig2(
     keys: &[(SecretKey, PublicKey)],
-    message: &bitcoin::secp256k1::Message,
+    message: &secp256k1::Message,
 ) -> anyhow::Result<LiftedSignature> {
     let message = message.as_ref();
-    let public_keys: Vec<_> = keys.iter().map(|key| key.1).collect();
+    let n_of_n_public_keys: Vec<_> =
+        keys.iter().map(|(_, pubkey)| *pubkey).collect();
 
-    let ctx = musig2::KeyAggContext::new(public_keys.clone())?;
-    let agg_public_keys: musig2::secp256k1::PublicKey = ctx.aggregated_pubkey();
+    let ctx = KeyAggContext::new(n_of_n_public_keys.clone())?;
+    let aggregated_pubkey: PublicKey = ctx.aggregated_pubkey();
 
-    let nonces = keys
+    let partial_nonce_pairs = keys
         .iter()
         .enumerate()
-        .map(|(index, key)| {
-            generate_nonce(key, agg_public_keys, message, index)
+        .map(|(index, keypair)| {
+            generate_nonce(keypair, aggregated_pubkey, message, index)
         })
         .collect::<Vec<_>>();
 
-    let agg_nonce = nonces
+    let aggregated_nonce = partial_nonce_pairs
         .iter()
-        .map(|nonce| nonce.1.clone())
+        .map(|(_, pubnonce)| pubnonce.clone())
         .collect::<Vec<PubNonce>>()
         .iter()
         .sum();
 
-    let partial_sigs = keys
+    let partial_signatures = keys
         .iter()
-        .zip(nonces.iter())
-        .map(|(key, nonce)| {
+        .zip(partial_nonce_pairs.iter())
+        .map(|((seckey, _), (secnonce, _))| {
             gen_partial_signature(
-                &key.0,
-                public_keys.clone(),
+                seckey,
+                n_of_n_public_keys.clone(),
                 message,
-                &nonce.0,
-                &agg_nonce,
+                secnonce,
+                &aggregated_nonce,
             )
             .unwrap()
         })
         .collect::<Vec<_>>();
 
     gen_aggregated_signature(
-        public_keys.clone(),
+        n_of_n_public_keys,
         message,
-        &agg_nonce,
-        partial_sigs,
+        &aggregated_nonce,
+        partial_signatures,
     )
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::Digest;
+    use crate::utils::inner_from;
     #[test]
     fn test_musig2_functional_api() {
-        let digest = sha2::Sha256::digest(b"hello world").to_vec();
+        let digest = b"hello musig2 world".to_vec();
         let message =
             bitcoin::secp256k1::Message::from_digest_slice(&digest).unwrap();
         let keys = generate_keys::<5>();

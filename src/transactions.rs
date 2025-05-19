@@ -205,7 +205,7 @@ pub fn create_f2_tx(
     Ok((tx_f2, f2_lock, spend_info, msg))
 }
 
-pub fn finalize_f2_tx(
+pub fn finalize_lock_tx(
     tx: &mut Transaction,
     sig: LiftedSignature,
     spend_info: &TaprootSpendInfo,
@@ -293,7 +293,8 @@ mod tests {
     use super::*;
     use crate::core::find_valid_nonce;
     use crate::core::flow_id_to_prefix_bytes;
-    use crate::musig2::{generate_keys, inner_from, simulate_musig2};
+    use crate::musig2::{generate_keys, simulate_musig2};
+    use crate::utils::inner_from;
     use Transaction;
     use bitcoin::Network;
     use bitcoin::OutPoint;
@@ -468,7 +469,7 @@ mod tests {
         )
         .unwrap();
         let final_sig = simulate_musig2(sk_signers, &message).unwrap();
-        finalize_f2_tx(&mut tx, final_sig, f1_spend_info, f1_lock, x, nonce)
+        finalize_lock_tx(&mut tx, final_sig, f1_spend_info, f1_lock, x, nonce)
             .unwrap();
 
         TxFixture {
@@ -508,7 +509,7 @@ mod tests {
         )
         .unwrap();
         let final_sig = simulate_musig2(sk_signers, &message).unwrap();
-        finalize_f2_tx(&mut tx, final_sig, f2_spend_info, f2_lock, x, nonce)
+        finalize_lock_tx(&mut tx, final_sig, f2_spend_info, f2_lock, x, nonce)
             .unwrap();
         tx
     }
@@ -574,7 +575,7 @@ mod tests {
         )?;
         let final_sig = simulate_musig2(sk_signers, &message).unwrap();
         // invalid input value: x+1
-        finalize_f2_tx(
+        finalize_lock_tx(
             &mut spending_tx,
             final_sig,
             &f2_spend_info,

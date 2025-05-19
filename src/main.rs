@@ -38,11 +38,12 @@ use bitcoin::{Address, OutPoint, Txid};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
-use collidervm_toy::musig2::{inner_from, simulate_musig2};
+use collidervm_toy::musig2::simulate_musig2;
 use collidervm_toy::transactions::{
     create_f1_tx, create_f2_tx, create_spending_tx, finalize_f1_tx,
-    finalize_f2_tx,
+    finalize_lock_tx,
 };
+use collidervm_toy::utils::inner_from;
 use collidervm_toy::utils::{
     wait_for_confirmation, wrap_network, write_transaction_to_file,
 };
@@ -123,26 +124,11 @@ fn main() -> anyhow::Result<()> {
     );
 
     let network = wrap_network(args.network.as_str());
-
     let secp: Secp256k1<bitcoin::secp256k1::All> = Secp256k1::new();
-
-    //let (sk_signer, pk_signer) = secp.generate_keypair(&mut rand::thread_rng());
-
     let sk_signers = collidervm_toy::musig2::generate_keys::<3>();
     let pk_signers = sk_signers.iter().map(|key| key.1).collect::<Vec<_>>();
     let agg_ctx = musig2::KeyAggContext::new(pk_signers)?;
     let pk_signer: musig2::secp256k1::PublicKey = agg_ctx.aggregated_pubkey();
-
-    // let (sk_operator, pk_operator) =
-    //     secp.generate_keypair(&mut rand::thread_rng());
-
-    //let signer_compressed_pk =
-    //    CompressedPublicKey::try_from(bitcoin::PublicKey::new(pk_signer))?;
-    //let signer_addr = Address::p2wpkh(&signer_compressed_pk, network);
-
-    // let operator_compressed_pk =
-    //     CompressedPublicKey::try_from(PublicKey::new(pk_operator))?;
-    // let operator_addr = Address::p2wpkh(&operator_compressed_pk, network);
 
     let funding_outpoint = if args.dry_run {
         OutPoint {
@@ -174,8 +160,6 @@ fn main() -> anyhow::Result<()> {
 
     let flow_id_prefix = flow_id_to_prefix_bytes(flow_id, B_PARAM);
 
-    //let sk_keypair = Keypair::from_secret_key(&secp, &sk_signer);
-    //let pk_keypair = sk_keypair.public_key();
     let (
         mut f1_tx,
         f1_lock,
@@ -214,7 +198,7 @@ fn main() -> anyhow::Result<()> {
         &args.fee_rate,
     )?;
     let final_signature = simulate_musig2(&sk_signers, &message)?;
-    finalize_f2_tx(
+    finalize_lock_tx(
         &mut f2_tx,
         final_signature,
         &f1_spend_info,
@@ -235,7 +219,7 @@ fn main() -> anyhow::Result<()> {
         &args.fee_rate,
     )?;
     let final_signature = simulate_musig2(&sk_signers, &message)?;
-    finalize_f2_tx(
+    finalize_lock_tx(
         &mut spending_tx,
         final_signature,
         &f2_spend_info,
@@ -256,17 +240,7 @@ fn main() -> anyhow::Result<()> {
         })
         .collect::<Vec<_>>();
     let demo_output = DemoOutput {
-        keys: KeyInfo {
-            signers,
-            //KeyPair {
-            //    //address: signer_addr.to_string(),
-            //    //wif: bitcoin::PrivateKey::new(re_export(sk_signers[0]), network).to_wif(),
-            //},
-            // operator: KeyPair {
-            //     address: receiver_addr.to_string(),
-            //     wif: "".to_string(), // TODO
-            // },
-        },
+        keys: KeyInfo { signers },
         transactions: Some(TransactionInfo {
             f1: TxInfo {
                 txid: f1_tx.compute_txid().to_string(),
@@ -343,7 +317,7 @@ fn get_funding_outpoint(
     network: Network,
     signer_pubkey: &PublicKey,
     required_amount_sat: u64,
-) -> bitcoin::OutPoint {
+) -> OutPoint {
     let funding_address =
         create_funding_taproot_address(signer_pubkey, secp, network);
     let txid = rpc_client
@@ -370,5 +344,5 @@ fn get_funding_outpoint(
         1
     };
 
-    bitcoin::OutPoint { txid, vout }
+    OutPoint { txid, vout }
 }

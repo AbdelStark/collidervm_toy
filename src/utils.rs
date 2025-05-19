@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use bitcoin::{Network, Txid, secp256k1::SecretKey};
 use bitcoincore_rpc::{Client, RpcApi};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Encode an i64 as a minimally‑encoded script number (little‑endian)
 pub fn encode_scriptnum(n: i64) -> Vec<u8> {
@@ -218,4 +220,10 @@ impl NonceSearchProgress {
             pb.finish_with_message("Exceeded maximum attempts");
         }
     }
+}
+
+/// This is special for conversion of SecretKey and PublicKey between ::musig2::secp256k and ::secp256k1
+pub fn inner_from<F: Serialize, T: DeserializeOwned>(from: F) -> T {
+    let value = serde_json::to_value(&from).unwrap();
+    serde_json::from_value(value).unwrap()
 }

@@ -133,11 +133,11 @@ pub fn simulate_musig2(
 mod tests {
     use super::*;
     use crate::utils::inner_from;
+    use secp256k1::constants::MESSAGE_SIZE;
     #[test]
     fn test_musig2_functional_api() {
-        let digest = b"hello musig2 world".to_vec();
-        let message =
-            bitcoin::secp256k1::Message::from_digest_slice(&digest).unwrap();
+        let digest = [1u8; MESSAGE_SIZE];
+        let message = secp256k1::Message::from_digest_slice(&digest).unwrap();
         let keys = generate_keys::<5>();
 
         let public_keys: Vec<_> = keys.into_iter().map(|key| key.1).collect();

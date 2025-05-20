@@ -1,6 +1,6 @@
 use crate::utils::NonceSearchProgress;
 use bitcoin::{
-    Amount, PublicKey, Transaction, XOnlyPublicKey,
+    Amount, PublicKey, XOnlyPublicKey,
     blockdata::script::{Builder, ScriptBuf},
     opcodes::{self, OP_TRUE},
 };
@@ -12,64 +12,13 @@ use bitvm::hash::blake3::blake3_compute_script_with_limb;
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
-use secp256k1::{Keypair, Message, SecretKey, schnorr::Signature};
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use secp256k1::Message;
+use std::time::{Duration, Instant};
 
 /// F1 threshold: x must be > 100
 pub const F1_THRESHOLD: u32 = 100;
 /// F2 threshold: x must be < 200
 pub const F2_THRESHOLD: u32 = 200;
-
-/// ColliderVM parameters
-#[derive(Debug, Clone)]
-pub struct ColliderVmConfig {
-    pub n: usize,
-    pub m: usize,
-    pub l: usize,
-    pub b: usize, // must be <= 32
-    pub k: usize,
-}
-
-/// Info for one Signer
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct SignerInfo {
-    pub id: usize,
-    pub pubkey: PublicKey,
-    pub keypair: Keypair,
-    pub xonly: XOnlyPublicKey,
-    pub privkey: SecretKey,
-}
-
-/// Info for one Operator
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct OperatorInfo {
-    pub id: usize,
-    pub pubkey: PublicKey,
-    pub privkey: SecretKey,
-}
-
-/// A single step in the protocol
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct PresignedStep {
-    pub tx_template: Transaction,
-    pub sighash_message: Message,
-    pub signatures: HashMap<Vec<u8>, Signature>,
-    pub locking_script: ScriptBuf,
-}
-
-/// A flow for a specific flow_id
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct PresignedFlow {
-    pub flow_id: u32,
-    pub steps: Vec<PresignedStep>,
-}
 
 /// Create a minimal sighash for demonstration
 pub fn create_toy_sighash_message(

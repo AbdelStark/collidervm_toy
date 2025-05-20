@@ -1,4 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use std::cmp::max;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -53,21 +54,34 @@ pub fn wait_for_confirmation(
     rpc_client: &Client,
     txid: &Txid,
     confirmations: u32,
-    timeout_sec: u64,
+    block_time: u64,
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
+    let timeout = 2 * block_time;
+    let sleep = Duration::from_secs(max(2, timeout / 5));
     loop {
         match rpc_client.get_raw_transaction_info(txid, None) {
             Ok(tx_info) => {
+                let elapsed_secs = start.elapsed().as_secs_f64();
+                let (unit, elapsed_disp) = if block_time >= 60 {
+                    ("minutes", elapsed_secs / 60.0)
+                } else {
+                    ("seconds", elapsed_secs)
+                };
                 if let Some(c) = tx_info.confirmations {
-                    println!("⏳ Confirmations: {c}"); // Changed from {confirmations} to {c}
                     if c >= confirmations {
-                        println!("✅ Transaction is confirmed!");
-                        break;
+                        println!(
+                            "✅ Transaction confirmed (×{c}) in {elapsed_disp:.1} {unit}!"
+                        );
+                        return Ok(());
+                    } else {
+                        println!(
+                            "⏳ Confirmations: {c}. Elapsed: {elapsed_disp:.1} {unit}...",
+                        );
                     }
                 } else {
                     println!(
-                        "⏳ Transaction in mempool, no confirmations yet."
+                        "⏳ Transaction in the mempool. Elapsed: {elapsed_disp:.1} {unit}...",
                     );
                 }
             }
@@ -75,12 +89,11 @@ pub fn wait_for_confirmation(
                 anyhow::bail!(e);
             }
         }
-        if start.elapsed().as_secs() > timeout_sec {
+        if start.elapsed().as_secs() > timeout {
             anyhow::bail!("timed out waiting for confirmation");
         }
-        std::thread::sleep(Duration::from_secs(1)); // wait and poll again
+        std::thread::sleep(sleep);
     }
-    Ok(())
 }
 
 pub fn write_transaction_to_file(
@@ -99,6 +112,7 @@ pub fn wrap_network(network: &str) -> Network {
         "regtest" => Network::Regtest,
         "signet" => Network::Signet,
         "testnet" => Network::Testnet,
+        "mainnet" => Network::Bitcoin,
         _ => todo!(),
     }
 }

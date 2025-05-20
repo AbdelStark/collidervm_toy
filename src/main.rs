@@ -55,8 +55,8 @@ use output::{
     write_demo_output_to_file,
 };
 
-/// Minimal amount we ask the user to deposit (10 000 sat ≈ 0.0001 BTC)
-const REQUIRED_AMOUNT_SAT: u64 = 200_000;
+/// Minimal amount we ask the user to deposit (200 000 sat ≈ 0.002 BTC)
+const REQUIRED_AMOUNT_SAT: u64 = 150_000;
 /// Hard‑coded ColliderVM parameters (match the toy simulation)
 const L_PARAM: usize = 4;
 const B_PARAM: usize = 16; // multiple of 8 ≤ 32
@@ -124,6 +124,15 @@ fn main() -> anyhow::Result<()> {
     );
 
     let network = wrap_network(args.network.as_str());
+
+    let timeout = match network {
+        Network::Regtest => 1,
+        Network::Signet => 10 * 60,
+        Network::Testnet => 10 * 60,
+        Network::Bitcoin => 10 * 60,
+        _ => todo!(),
+    };
+
     let secp: Secp256k1<bitcoin::secp256k1::All> = Secp256k1::new();
     let sk_signers = collidervm_toy::musig2::generate_keys::<3>();
     let pk_signers = sk_signers.iter().map(|key| key.1).collect::<Vec<_>>();
@@ -272,20 +281,21 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     if !args.dry_run {
-        println!("▶️  Pushed f1, txid: {}", f1_tx.compute_txid());
+        println!("▶️  Waiting for founding tx: {}", funding_outpoint.txid);
+        wait_for_confirmation(&rpc_client, &funding_outpoint.txid, 1, timeout)
+            .unwrap();
+
+        println!("▶️  Pushed f1: {}", f1_tx.compute_txid());
         let f1_txid = rpc_client.send_raw_transaction(&f1_tx)?;
-        wait_for_confirmation(&rpc_client, &f1_txid, 1, 60)?;
+        wait_for_confirmation(&rpc_client, &f1_txid, 1, timeout)?;
 
-        println!("▶️  Pushed f2, txid: {}", f2_tx.compute_txid());
+        println!("▶️  Pushed f2: {}", f2_tx.compute_txid());
         let f2_txid = rpc_client.send_raw_transaction(&f2_tx)?;
-        wait_for_confirmation(&rpc_client, &f2_txid, 1, 60)?;
+        wait_for_confirmation(&rpc_client, &f2_txid, 1, timeout)?;
 
-        println!(
-            "▶️  Pushed spending tx, txid: {}",
-            spending_tx.compute_txid()
-        );
+        println!("▶️  Pushed spending tx: {}", spending_tx.compute_txid());
         let spending_tx_txid = rpc_client.send_raw_transaction(&spending_tx)?;
-        wait_for_confirmation(&rpc_client, &spending_tx_txid, 1, 60)?;
+        wait_for_confirmation(&rpc_client, &spending_tx_txid, 1, timeout)?;
     }
 
     Ok(())
@@ -333,7 +343,6 @@ fn get_funding_outpoint(
         )
         .map_err(|err| panic!("Error: {err}"))
         .unwrap();
-    wait_for_confirmation(rpc_client, &txid, 1, 60).unwrap();
 
     let confirmed_funding_tx =
         rpc_client.get_raw_transaction(&txid, None).unwrap();

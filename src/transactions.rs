@@ -58,9 +58,10 @@ pub fn create_f1_tx(
     let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), *network);
 
     let fee_f1 = estimate_fee_vbytes(155, *fee_rate); // ~1 input + 1 output
-    let f1_output_value = funding_value_sat.checked_sub(fee_f1).expect(
-        &format!("function {funding_value_sat} too small for fee {fee_f1}"),
-    );
+    let f1_output_value =
+        funding_value_sat.checked_sub(fee_f1).unwrap_or_else(|| {
+            panic!("function {funding_value_sat} too small for fee {fee_f1}")
+        });
 
     let mut tx_f1 = Transaction {
         version: Version::TWO,
@@ -168,9 +169,10 @@ pub fn create_f2_tx(
 
     // Now the tx vsize is about 17093.
     let fee_f2 = estimate_fee_vbytes(17093, *fee_rate); // 1 input P2TR + 1 output
-    let f2_output_value = f1_output_value.checked_sub(fee_f2).expect(&format!(
-        "f1 output {f1_output_value} too small for f2 fee {fee_f2}"
-    ));
+    let f2_output_value =
+        f1_output_value.checked_sub(fee_f2).unwrap_or_else(|| {
+            panic!("f1 output {f1_output_value} too small for f2 fee {fee_f2}")
+        });
 
     let mut tx_f2 = Transaction {
         version: Version::TWO,
@@ -251,7 +253,7 @@ pub fn create_spending_tx(
     let fee_spending_tx = estimate_fee_vbytes(17082, *fee_rate); // 1 input P2TR + 1 output
     let spending_output_value = f2_output_value
         .checked_sub(fee_spending_tx)
-        .expect(&format!("f2 output {f2_output_value} too small for spending tx {fee_spending_tx}"));
+        .unwrap_or_else(|| panic!("f2 output {f2_output_value} too small for spending tx {fee_spending_tx}"));
 
     let mut spending_tx = Transaction {
         version: Version::TWO,

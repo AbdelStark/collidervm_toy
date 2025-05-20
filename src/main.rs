@@ -31,10 +31,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use bitcoin::Network;
-use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, OutPoint, Txid};
+use bitcoin::{Address, OutPoint};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
@@ -139,20 +138,19 @@ fn main() -> anyhow::Result<()> {
     let agg_ctx = musig2::KeyAggContext::new(pk_signers)?;
     let pk_signer: musig2::secp256k1::PublicKey = agg_ctx.aggregated_pubkey();
 
-    let funding_outpoint = if args.dry_run {
-        OutPoint {
-            txid: Txid::all_zeros(),
-            vout: 0,
-        }
-    } else {
-        get_funding_outpoint(
-            &rpc_client,
-            &secp,
-            network,
-            &inner_from(pk_signer),
-            REQUIRED_AMOUNT_SAT,
-        )
-    };
+    if args.dry_run {
+        println!(
+            "⚠️  Dry run mode: funding tx will be sent, but no further transactions will be broadcast."
+        );
+    }
+
+    let funding_outpoint = get_funding_outpoint(
+        &rpc_client,
+        &secp,
+        network,
+        &inner_from(pk_signer),
+        REQUIRED_AMOUNT_SAT,
+    );
 
     // In a production‑ready tool we would RPC‑query the node to retrieve the
     // exact amount & pkScript of the funding UTXO.  To keep the demo

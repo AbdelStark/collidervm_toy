@@ -346,6 +346,9 @@ fn get_funding_outpoint(
 
     let confirmed_funding_tx =
         rpc_client.get_raw_transaction(&txid, None).unwrap();
+
+    println!("▶️  Pushed founding tx: {}", txid);
+
     let tx_out_sp_0 = &confirmed_funding_tx.output[0].script_pubkey;
     let vout = if *tx_out_sp_0 == funding_address.script_pubkey() {
         0

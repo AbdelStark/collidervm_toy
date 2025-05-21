@@ -79,14 +79,12 @@ pub fn wait_for_confirmation(
                             "⏳ Confirmations: {c}. Elapsed: {elapsed_disp:.1} {unit}...",
                         );
                     }
+                } else if elapsed_secs > sleep.as_secs() as f64 {
+                    println!(
+                        "⏳ Transaction in the mempool. Elapsed: {elapsed_disp:.1} {unit}...",
+                    );
                 } else {
-                    if elapsed_secs > sleep.as_secs() as f64 {
-                        println!(
-                            "⏳ Transaction in the mempool. Elapsed: {elapsed_disp:.1} {unit}...",
-                        );
-                    } else {
-                        println!("⏳ Transaction in the mempool...");
-                    }
+                    println!("⏳ Transaction in the mempool...");
                 }
             }
             Err(e) => {

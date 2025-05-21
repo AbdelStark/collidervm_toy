@@ -1,8 +1,8 @@
-use crate::utils::{encode_scriptnum};
 use crate::core::{
     blake3_message_to_limbs, build_script_f1_blake3_locked,
     build_script_f2_blake3_locked,
 };
+use crate::utils::encode_scriptnum;
 use anyhow;
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
@@ -40,7 +40,7 @@ pub fn create_f1_tx(
     TaprootSpendInfo,
     Message,
 )> {
-    // Build F1 locking script 
+    // Build F1 locking script
     let lock = build_script_f1_blake3_locked(
         &bitcoin::PublicKey::new(*pk_signer),
         flow_id_prefix,
@@ -64,7 +64,8 @@ pub fn create_f1_tx(
         .add_leaf(0, funding_script.clone())?
         .finalize(secp, xonly_pk)
         .unwrap();
-    let funding_address = Address::p2tr_tweaked(funding_spend_info.output_key(), *network);
+    let funding_address =
+        Address::p2tr_tweaked(funding_spend_info.output_key(), *network);
 
     // Build the transaction with dummy witness for fee estimation
     let mut tx_f1 = Transaction {
@@ -81,16 +82,22 @@ pub fn create_f1_tx(
             script_pubkey: tr_addr.script_pubkey(),
         }],
     };
-    fill_dummy_taproot_witness(&mut tx_f1, &funding_spend_info, &funding_script);
+    fill_dummy_taproot_witness(
+        &mut tx_f1,
+        &funding_spend_info,
+        &funding_script,
+    );
     let vsize = tx_f1.vsize();
     let fee_f1 = vsize as u64 * *fee_rate;
-    let f1_output_value = funding_value_sat.checked_sub(fee_f1).unwrap_or_else(|| {
-        panic!("function {funding_value_sat} too small for fee {fee_f1}")
-    });
+    let f1_output_value =
+        funding_value_sat.checked_sub(fee_f1).unwrap_or_else(|| {
+            panic!("function {funding_value_sat} too small for fee {fee_f1}")
+        });
     tx_f1.output[0].value = Amount::from_sat(f1_output_value);
     tx_f1.input[0].witness = Witness::new();
 
-    let leaf_hash = TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
+    let leaf_hash =
+        TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
     let mut cache = SighashCache::new(&mut tx_f1);
     let sighash = cache.taproot_script_spend_signature_hash(
         0,
@@ -183,9 +190,10 @@ pub fn create_f2_tx(
     fill_dummy_taproot_witness(&mut tx_f2, &spend_info, &f2_lock);
     let vsize = tx_f2.vsize();
     let fee_f2 = vsize as u64 * *fee_rate + 10; // TODO: vsize is not accurate;
-    let f2_output_value = f1_output_value.checked_sub(fee_f2).unwrap_or_else(|| {
-        panic!("f1 output {f1_output_value} too small for f2 fee {fee_f2}")
-    });
+    let f2_output_value =
+        f1_output_value.checked_sub(fee_f2).unwrap_or_else(|| {
+            panic!("f1 output {f1_output_value} too small for f2 fee {fee_f2}")
+        });
     tx_f2.output[0].value = Amount::from_sat(f2_output_value);
     tx_f2.input[0].witness = Witness::new();
 
@@ -241,7 +249,7 @@ fn fill_dummy_taproot_witness(
     spend_info: &TaprootSpendInfo,
     lock: &ScriptBuf,
 ) {
-    use bitcoin::secp256k1::{Secp256k1, Keypair, SecretKey, Message};
+    use bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey};
     use musig2::LiftedSignature;
     let secp = Secp256k1::new();
     let sk = SecretKey::from_slice(&[1u8; 32]).unwrap();
@@ -251,7 +259,8 @@ fn fill_dummy_taproot_witness(
     let dummy_sig = LiftedSignature::from_bytes(schnorr_sig.as_ref()).unwrap();
     let dummy_x = &0u32;
     let dummy_nonce = &0u64;
-    let _ = finalize_lock_tx(tx, dummy_sig, spend_info, lock, dummy_x, dummy_nonce);
+    let _ =
+        finalize_lock_tx(tx, dummy_sig, spend_info, lock, dummy_x, dummy_nonce);
 }
 
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.
@@ -289,7 +298,7 @@ pub fn create_spending_tx(
         .checked_sub(fee_spending_tx)
         .unwrap_or_else(|| panic!("f2 output {f2_output_value} too small for spending tx {fee_spending_tx}"));
 
-        // Set the correct output value
+    // Set the correct output value
     spending_tx.output[0].value = Amount::from_sat(spending_output_value);
 
     // Clear the dummy witness for signing later

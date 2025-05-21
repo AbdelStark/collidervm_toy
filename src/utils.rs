@@ -57,7 +57,7 @@ pub fn wait_for_confirmation(
     block_time: u64,
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
-    let timeout = 2 * block_time;
+    let timeout = 10 * block_time;
     let sleep = Duration::from_secs(max(2, timeout / 5));
     loop {
         match rpc_client.get_raw_transaction_info(txid, None) {
@@ -80,9 +80,13 @@ pub fn wait_for_confirmation(
                         );
                     }
                 } else {
-                    println!(
-                        "⏳ Transaction in the mempool. Elapsed: {elapsed_disp:.1} {unit}...",
-                    );
+                    if elapsed_secs > sleep.as_secs() as f64 {
+                        println!(
+                            "⏳ Transaction in the mempool. Elapsed: {elapsed_disp:.1} {unit}...",
+                        );
+                    } else {
+                        println!("⏳ Transaction in the mempool...");
+                    }
                 }
             }
             Err(e) => {

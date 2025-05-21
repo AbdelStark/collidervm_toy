@@ -46,7 +46,7 @@ pub struct DemoParameters {
 }
 
 pub fn write_demo_output_to_file(
-    output: &crate::DemoOutput,
+    output: &DemoOutput,
     output_dir: &str,
     path: &str,
 ) -> Result<()> {

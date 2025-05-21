@@ -223,6 +223,7 @@ fn main() -> anyhow::Result<()> {
         &f2_output_value,
         &receiver_addr,
         &f2_lock,
+        &f2_spend_info,
         &args.fee_rate,
     )?;
     let final_signature = simulate_musig2(&sk_signers, &message)?;

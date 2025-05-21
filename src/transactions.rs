@@ -1,8 +1,8 @@
+use crate::utils::{encode_scriptnum};
 use crate::core::{
     blake3_message_to_limbs, build_script_f1_blake3_locked,
     build_script_f2_blake3_locked,
 };
-use crate::utils::{encode_scriptnum, estimate_fee_vbytes};
 use anyhow;
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
@@ -40,14 +40,14 @@ pub fn create_f1_tx(
     TaprootSpendInfo,
     Message,
 )> {
-    // ── build F1 locking script ─────────────────────────────────────────
+    // Build F1 locking script 
     let lock = build_script_f1_blake3_locked(
         &bitcoin::PublicKey::new(*pk_signer),
         flow_id_prefix,
         b_bits,
     );
 
-    // ── wrap in a Taproot tree & derive its address ─────────────────────
+    // Wrap in a Taproot tree & derive its address
     let x_only_pk = secp256k1::XOnlyPublicKey::from(*pk_signer);
     let spend_info = TaprootBuilder::new()
         .add_leaf(0, lock.clone())
@@ -57,12 +57,16 @@ pub fn create_f1_tx(
 
     let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), *network);
 
-    let fee_f1 = estimate_fee_vbytes(155, *fee_rate); // ~1 input + 1 output
-    let f1_output_value =
-        funding_value_sat.checked_sub(fee_f1).unwrap_or_else(|| {
-            panic!("function {funding_value_sat} too small for fee {fee_f1}")
-        });
+    // Build funding script and spend info for the input
+    let xonly_pk = XOnlyPublicKey::from(*pk_signer);
+    let funding_script = get_funding_script(&x_only_pk);
+    let funding_spend_info = TaprootBuilder::new()
+        .add_leaf(0, funding_script.clone())?
+        .finalize(secp, xonly_pk)
+        .unwrap();
+    let funding_address = Address::p2tr_tweaked(funding_spend_info.output_key(), *network);
 
+    // Build the transaction with dummy witness for fee estimation
     let mut tx_f1 = Transaction {
         version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
@@ -73,27 +77,20 @@ pub fn create_f1_tx(
             witness: Witness::new(),
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(f1_output_value),
+            value: Amount::from_sat(0), // Placeholder, will set after fee calc
             script_pubkey: tr_addr.script_pubkey(),
         }],
     };
+    fill_dummy_taproot_witness(&mut tx_f1, &funding_spend_info, &funding_script);
+    let vsize = tx_f1.vsize();
+    let fee_f1 = vsize as u64 * *fee_rate;
+    let f1_output_value = funding_value_sat.checked_sub(fee_f1).unwrap_or_else(|| {
+        panic!("function {funding_value_sat} too small for fee {fee_f1}")
+    });
+    tx_f1.output[0].value = Amount::from_sat(f1_output_value);
+    tx_f1.input[0].witness = Witness::new();
 
-    let xonly_pk = XOnlyPublicKey::from(*pk_signer);
-    let funding_script = get_funding_script(&x_only_pk);
-
-    let leaf_hash =
-        TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
-
-    // Build the tree with a single leaf
-    let funding_spend_info = TaprootBuilder::new()
-        .add_leaf(0, funding_script.clone())?
-        .finalize(secp, xonly_pk)
-        .unwrap();
-
-    // The scriptPubKey for this Taproot output and the address (for funding):
-    let funding_address =
-        Address::p2tr_tweaked(funding_spend_info.output_key(), *network);
-
+    let leaf_hash = TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
     let mut cache = SighashCache::new(&mut tx_f1);
     let sighash = cache.taproot_script_spend_signature_hash(
         0,
@@ -104,9 +101,7 @@ pub fn create_f1_tx(
         leaf_hash,
         TapSighashType::Default,
     )?;
-
     let msg = Message::from_digest_slice(&sighash[..])?;
-
     Ok((
         tx_f1,
         lock,
@@ -153,7 +148,7 @@ pub fn create_f2_tx(
     flow_id_prefix: &[u8],
     fee_rate: &u64,
 ) -> anyhow::Result<(Transaction, ScriptBuf, TaprootSpendInfo, Message)> {
-    // ── build F2 locking script & Taproot branch ────────────────────────
+    // Build F2 locking script & Taproot branch
     let f2_lock = build_script_f2_blake3_locked(
         &bitcoin::PublicKey::new(*pk_signer),
         flow_id_prefix,
@@ -167,13 +162,7 @@ pub fn create_f2_tx(
         .unwrap();
     let tr_addr = Address::p2tr_tweaked(spend_info.output_key(), *network);
 
-    // Now the tx vsize is about 17093.
-    let fee_f2 = estimate_fee_vbytes(17093, *fee_rate); // 1 input P2TR + 1 output
-    let f2_output_value =
-        f1_output_value.checked_sub(fee_f2).unwrap_or_else(|| {
-            panic!("f1 output {f1_output_value} too small for f2 fee {fee_f2}")
-        });
-
+    // Build the transaction with dummy witness for fee estimation
     let mut tx_f2 = Transaction {
         version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
@@ -187,14 +176,20 @@ pub fn create_f2_tx(
             witness: Witness::new(),
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(f2_output_value),
+            value: Amount::from_sat(0), // Placeholder, will set after fee calc
             script_pubkey: tr_addr.script_pubkey(),
         }],
     };
+    fill_dummy_taproot_witness(&mut tx_f2, &spend_info, &f2_lock);
+    let vsize = tx_f2.vsize();
+    let fee_f2 = vsize as u64 * *fee_rate + 10; // TODO: vsize is not accurate;
+    let f2_output_value = f1_output_value.checked_sub(fee_f2).unwrap_or_else(|| {
+        panic!("f1 output {f1_output_value} too small for f2 fee {fee_f2}")
+    });
+    tx_f2.output[0].value = Amount::from_sat(f2_output_value);
+    tx_f2.input[0].witness = Witness::new();
 
-    // Build the witness stack for the P2TR spend
     let leaf_hash = TapLeafHash::from_script(f1_lock, LeafVersion::TapScript);
-
     let mut cache = SighashCache::new(&mut tx_f2);
     let sighash = cache.taproot_script_spend_signature_hash(
         0,
@@ -202,7 +197,6 @@ pub fn create_f2_tx(
         leaf_hash,
         TapSighashType::Default,
     )?;
-
     let msg = Message::from_digest_slice(&sighash[..])?;
     Ok((tx_f2, f2_lock, spend_info, msg))
 }
@@ -241,6 +235,25 @@ pub fn finalize_lock_tx(
     Ok(())
 }
 
+/// Fills a transaction's witness with a dummy valid structure for fee estimation
+fn fill_dummy_taproot_witness(
+    tx: &mut Transaction,
+    spend_info: &TaprootSpendInfo,
+    lock: &ScriptBuf,
+) {
+    use bitcoin::secp256k1::{Secp256k1, Keypair, SecretKey, Message};
+    use musig2::LiftedSignature;
+    let secp = Secp256k1::new();
+    let sk = SecretKey::from_slice(&[1u8; 32]).unwrap();
+    let keypair = Keypair::from_secret_key(&secp, &sk);
+    let msg = Message::from_digest_slice(&[2u8; 32]).unwrap();
+    let schnorr_sig = secp.sign_schnorr(&msg, &keypair);
+    let dummy_sig = LiftedSignature::from_bytes(schnorr_sig.as_ref()).unwrap();
+    let dummy_x = &0u32;
+    let dummy_nonce = &0u64;
+    let _ = finalize_lock_tx(tx, dummy_sig, spend_info, lock, dummy_x, dummy_nonce);
+}
+
 /// Creates and signs the spending transaction, spending the F2 output to the receiver.
 #[allow(clippy::too_many_arguments)]
 pub fn create_spending_tx(
@@ -248,13 +261,10 @@ pub fn create_spending_tx(
     f2_output_value: &u64,
     receiver_addr: &Address,
     f2_lock: &ScriptBuf,
+    f2_spend_info: &TaprootSpendInfo, // <-- new parameter
     fee_rate: &u64,
 ) -> anyhow::Result<(Transaction, Message)> {
-    let fee_spending_tx = estimate_fee_vbytes(17082, *fee_rate); // 1 input P2TR + 1 output
-    let spending_output_value = f2_output_value
-        .checked_sub(fee_spending_tx)
-        .unwrap_or_else(|| panic!("f2 output {f2_output_value} too small for spending tx {fee_spending_tx}"));
-
+    // Build the transaction with dummy witness for fee estimation
     let mut spending_tx = Transaction {
         version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
@@ -268,10 +278,22 @@ pub fn create_spending_tx(
             witness: Witness::new(),
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(spending_output_value),
+            value: Amount::from_sat(0), // Placeholder, will set after fee calc
             script_pubkey: receiver_addr.script_pubkey(),
         }],
     };
+    fill_dummy_taproot_witness(&mut spending_tx, f2_spend_info, f2_lock);
+    let vsize = spending_tx.vsize();
+    let fee_spending_tx = vsize as u64 * *fee_rate + 10; // TODO: vsize is not accurate
+    let spending_output_value = f2_output_value
+        .checked_sub(fee_spending_tx)
+        .unwrap_or_else(|| panic!("f2 output {f2_output_value} too small for spending tx {fee_spending_tx}"));
+
+        // Set the correct output value
+    spending_tx.output[0].value = Amount::from_sat(spending_output_value);
+
+    // Clear the dummy witness for signing later
+    spending_tx.input[0].witness = Witness::new();
 
     // Build the witness stack for the P2TR spend
     let leaf_hash = TapLeafHash::from_script(f2_lock, LeafVersion::TapScript);
@@ -507,6 +529,7 @@ mod tests {
             &tx_f2.output[0].value.to_sat(),
             receiver_addr,
             f2_lock,
+            f2_spend_info,
             fee_rate,
         )
         .unwrap();
@@ -573,6 +596,7 @@ mod tests {
             &tx_f2.output[0].value.to_sat(),
             receiver_addr,
             &f2_lock,
+            &f2_spend_info,
             fee_rate,
         )?;
         let final_sig = simulate_musig2(sk_signers, &message).unwrap();

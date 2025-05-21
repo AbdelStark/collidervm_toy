@@ -2,7 +2,17 @@
 // Rust port of mock_pool.py: Alephium mock pool for gpu-miner connectivity tests
 // Usage: cargo run --bin mock_pool -- --host 0.0.0.0 --port 10973 --difficulty 1
 
+use bitcoin::opcodes::OP_TRUE;
+use bitcoin::script::Builder;
+use bitcoin_script::script;
+use bitcoin_script_stack::optimizer;
+
+use bitvm::hash::blake3::blake3_compute_script_with_limb;
+use bitvm::{ExecuteInfo, execute_script_buf};
 use clap::Parser;
+use collidervm_toy::core::{
+    blake3_message_to_limbs, build_prefix_equalverify, combine_scripts,
+};
 use num_bigint::BigUint;
 use num_traits::One;
 use rand::RngCore;
@@ -146,6 +156,58 @@ fn is_good_solution(nonce: &[u8], header: &[u8], target: &[u8]) -> bool {
     h2_int < target_int
 }
 
+pub fn verify_alephium_pow_with_script(
+    nonce: &[u8],
+    header: &[u8],
+    target: &[u8],
+) -> ExecuteInfo {
+    let limb_len = 4;
+
+    assert_eq!(nonce.len(), NONCE_LEN, "nonce must be 24 bytes");
+    assert_eq!(header.len(), HEADER_LEN, "header must be 208 bytes");
+    assert_eq!(target.len(), 32, "target must be 32 bytes");
+
+    let mut message = Vec::with_capacity(BLAKE3_BUF_LEN);
+    message.extend_from_slice(nonce);
+    message.extend_from_slice(header);
+    message.resize(BLAKE3_BUF_LEN, 0);
+
+    let message_limbs = script! {
+        for limb in blake3_message_to_limbs(&message, limb_len).into_iter() {
+            { limb }
+        }
+    }
+    .compile();
+
+    let mut b = Builder::new();
+    for &limb in blake3_message_to_limbs(&message, 4).iter().rev() {
+        b = b.push_slice(&limb.to_be_bytes());
+    }
+    b.into_script();
+
+    let compute_blake3_once = optimizer::optimize(
+        blake3_compute_script_with_limb(BLAKE3_BUF_LEN, limb_len).compile(),
+    );
+
+    let compute_blake3_twice = optimizer::optimize(
+        blake3_compute_script_with_limb(32, limb_len).compile(),
+    );
+
+    let prefix_cmp_script = build_prefix_equalverify(target);
+
+    let success_script = Builder::new().push_opcode(OP_TRUE).into_script();
+
+    let script = combine_scripts(&[
+        message_limbs,
+        compute_blake3_once,
+        compute_blake3_twice,
+        prefix_cmp_script,
+        success_script,
+    ]);
+
+    execute_script_buf(script)
+}
+
 fn decode_submit_block(frame: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     if frame.len() < 10 {
         return None;
@@ -186,7 +248,7 @@ fn handle_miner(mut stream: TcpStream, diff: u64) -> io::Result<()> {
             Ok(p) => p,
             Err(_) => {
                 println!("[*] Miner disconnected");
-                break;
+                break Ok(());
             }
         };
         let pay_len =
@@ -195,7 +257,7 @@ fn handle_miner(mut stream: TcpStream, diff: u64) -> io::Result<()> {
             Ok(p) => p,
             Err(_) => {
                 println!("[*] Miner disconnected");
-                break;
+                break Ok(());
             }
         };
 
@@ -204,18 +266,33 @@ fn handle_miner(mut stream: TcpStream, diff: u64) -> io::Result<()> {
 
         if let Some((nonce, header, txs)) = decode_submit_block(&frame) {
             let good = is_good_solution(&nonce, &header, &target);
+            let res = verify_alephium_pow_with_script(&nonce, &header, &target);
+
+            // print nonce header, target here so I can paste them into test cases
+            println!("Nonce: {}", hex::encode(&nonce));
+            println!("Header: {}", hex::encode(&header));
+            println!("Target: {}", hex::encode(&target));
+            println!("Good: {}", good);
+
+            if !res.success {
+                println!("Success: {}", res.success);
+                println!("Final stack: {:?}", res.final_stack);
+                println!("Error: {:?}", res.error);
+            }
+
             println!(
-                "[{}] nonce {}  txs {}  valid={}",
+                "[{}, {}] nonce {}  txs {}  valid={}",
                 if good { "✓" } else { "✗" },
+                if res.success { "✓" } else { "✗" },
                 hex::encode(&nonce),
                 txs.len(),
                 good
             );
+            return Ok(());
         } else {
             println!("[!] Bad frame");
         }
     }
-    Ok(())
 }
 
 fn main() -> io::Result<()> {
@@ -229,7 +306,10 @@ fn main() -> io::Result<()> {
             Ok(stream) => {
                 let diff = args.difficulty;
                 thread::spawn(move || {
-                    let _ = handle_miner(stream, diff);
+                    if let Err(e) = handle_miner(stream, diff) {
+                        eprintln!("[!] Error handling miner: {}", e);
+                    }
+                    std::process::exit(0);
                 });
             }
             Err(e) => {
@@ -238,4 +318,33 @@ fn main() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Provide your own valid test data here:
+    const NONCE: [u8; NONCE_LEN] = [0; NONCE_LEN]; // <-- Replace with valid nonce
+    const HEADER: [u8; HEADER_LEN] = [0; HEADER_LEN]; // <-- Replace with valid header
+    const TARGET: [u8; 32] = [0; 32]; // <-- Replace with valid target
+
+    #[test]
+    fn test_verify_alephium_pow_with_script_valid() {
+        let res = verify_alephium_pow_with_script(&NONCE, &HEADER, &TARGET);
+        assert!(res.success, "Expected success for valid PoW");
+        assert!(
+            !res.final_stack.0.is_empty(),
+            "Final stack should not be empty"
+        );
+    }
+
+    #[test]
+    fn test_verify_alephium_pow_with_script_invalid() {
+        let mut bad_nonce = NONCE;
+        bad_nonce[0] ^= 0xFF;
+        let res_bad =
+            verify_alephium_pow_with_script(&bad_nonce, &HEADER, &TARGET);
+        assert!(!res_bad.success, "Expected failure for invalid PoW");
+    }
 }

@@ -137,7 +137,7 @@ pub fn flow_id_to_prefix_bytes(flow_id: u32, b_bits: usize) -> Vec<u8> {
 }
 
 /// Helper: combine scripts (by just concatenating the raw bytes).
-fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
+pub fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
     let mut combined = Vec::new();
     for frag in fragments {
         combined.extend(frag.to_bytes());
@@ -153,7 +153,7 @@ fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
 /// We need to take care of the fact that the prefix is now in nibbles.
 /// Also the ordering of elements on the stack.
 /// We need to push the prefix in reverse order to the stack.
-fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
+pub fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
     let mut b = Builder::new();
 
     // Check each nibble individually, pushing in reverse order to match stack evaluation

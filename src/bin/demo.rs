@@ -1,4 +1,8 @@
 //! ColliderVM Signet Demo Binary
+// ...existing code from main.rs...
+// ...existing code...
+
+//! ColliderVM Signet Demo Binary
 //!
 //! This binary generates **real Bitcoin Signet transactions** that execute the
 //! two‑step `F1/F2` ColliderVM toy program on‑chain.  It bridges the gap
@@ -38,6 +42,10 @@ use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
 use collidervm_toy::core::{find_valid_nonce, flow_id_to_prefix_bytes};
 use collidervm_toy::musig2::simulate_musig2;
+use collidervm_toy::output::{
+    DemoOutput, DemoParameters, KeyInfo, KeyPair, TransactionInfo, TxInfo,
+    write_demo_output_to_file,
+};
 use collidervm_toy::transactions::{
     create_f1_tx, create_f2_tx, create_spending_tx, finalize_f1_tx,
     finalize_lock_tx,
@@ -46,13 +54,8 @@ use collidervm_toy::utils::inner_from;
 use collidervm_toy::utils::{
     wait_for_confirmation, wrap_network, write_transaction_to_file,
 };
-use std::str::FromStr;
 
-mod output;
-use output::{
-    DemoOutput, DemoParameters, KeyInfo, KeyPair, TransactionInfo, TxInfo,
-    write_demo_output_to_file,
-};
+use std::str::FromStr;
 
 /// Minimal amount we ask the user to deposit (200 000 sat ≈ 0.002 BTC)
 const REQUIRED_AMOUNT_SAT: u64 = 150_000;

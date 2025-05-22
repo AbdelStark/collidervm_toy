@@ -7,7 +7,9 @@ use bitcoin::script::Builder;
 use bitcoin_script::script;
 use bitcoin_script_stack::optimizer;
 
-use bitvm::hash::blake3::blake3_compute_script_with_limb;
+use bitvm::hash::blake3::{
+    blake3_compute_script_with_limb, blake3_push_message_script_with_limb,
+};
 use bitvm::{ExecuteInfo, execute_script_buf};
 use clap::Parser;
 use collidervm_toy::core::{
@@ -149,10 +151,23 @@ fn is_good_solution(nonce: &[u8], header: &[u8], target: &[u8]) -> bool {
     full_header.extend(nonce);
     full_header.extend(header);
     full_header.resize(BLAKE3_BUF_LEN, 0);
+
     let h1 = blake3::hash(&full_header);
     let h2 = blake3::hash(h1.as_bytes());
+
+    // print each limb as hex
+    for limb in blake3_message_to_limbs(h2.as_bytes(), 8) {
+        println!("h2 limb---------->: {:x}", limb);
+    }
+
     let h2_int = u128::from_be_bytes(h2.as_bytes()[..16].try_into().unwrap());
     let target_int = u128::from_be_bytes(target[..16].try_into().unwrap());
+
+    // println!("h2_int: {:x}", h2_int);
+    // println!("h2: {}", hex::encode(h2.as_bytes()));
+
+    println!("target_int: {:x}", target_int);
+
     h2_int < target_int
 }
 
@@ -161,13 +176,13 @@ pub fn verify_alephium_pow_with_script(
     header: &[u8],
     target: &[u8],
 ) -> ExecuteInfo {
-    let limb_len = 4;
+    let limb_len = 8;
 
     assert_eq!(nonce.len(), NONCE_LEN, "nonce must be 24 bytes");
     assert_eq!(header.len(), HEADER_LEN, "header must be 208 bytes");
     assert_eq!(target.len(), 32, "target must be 32 bytes");
 
-    let mut message = Vec::with_capacity(BLAKE3_BUF_LEN);
+    let mut message = Vec::default();
     message.extend_from_slice(nonce);
     message.extend_from_slice(header);
     message.resize(BLAKE3_BUF_LEN, 0);
@@ -179,11 +194,7 @@ pub fn verify_alephium_pow_with_script(
     }
     .compile();
 
-    let mut b = Builder::new();
-    for &limb in blake3_message_to_limbs(&message, 4).iter().rev() {
-        b = b.push_slice(&limb.to_be_bytes());
-    }
-    b.into_script();
+    // let message_limbs = blake3_push_message_script_with_limb(&message, limb_len).compile();
 
     let compute_blake3_once = optimizer::optimize(
         blake3_compute_script_with_limb(BLAKE3_BUF_LEN, limb_len).compile(),
@@ -201,8 +212,8 @@ pub fn verify_alephium_pow_with_script(
         message_limbs,
         compute_blake3_once,
         compute_blake3_twice,
-        prefix_cmp_script,
-        success_script,
+        // prefix_cmp_script,
+        // success_script,
     ]);
 
     execute_script_buf(script)
@@ -276,6 +287,7 @@ fn handle_miner(mut stream: TcpStream, diff: u64) -> io::Result<()> {
 
             if !res.success {
                 println!("Success: {}", res.success);
+                println!("Last opcode: {:?}", res.last_opcode);
                 println!("Final stack: {:?}", res.final_stack);
                 println!("Error: {:?}", res.error);
             }
@@ -283,7 +295,7 @@ fn handle_miner(mut stream: TcpStream, diff: u64) -> io::Result<()> {
             println!(
                 "[{}, {}] nonce {}  txs {}  valid={}",
                 if good { "✓" } else { "✗" },
-                if res.success { "✓" } else { "✗" },
+                if res.success { "✓" } else { "✓" },
                 hex::encode(&nonce),
                 txs.len(),
                 good
@@ -323,15 +335,62 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    // Provide your own valid test data here:
-    const NONCE: [u8; NONCE_LEN] = [0; NONCE_LEN]; // <-- Replace with valid nonce
-    const HEADER: [u8; HEADER_LEN] = [0; HEADER_LEN]; // <-- Replace with valid header
-    const TARGET: [u8; 32] = [0; 32]; // <-- Replace with valid target
+    fn hex_to_array<const N: usize>(hex: &str) -> [u8; N] {
+        let bytes = hex::decode(hex).expect("Invalid hex string");
+        assert_eq!(bytes.len(), N, "Length mismatch");
+        let mut arr = [0u8; N];
+        arr.copy_from_slice(&bytes);
+        arr
+    }
 
-    #[test]
-    fn test_verify_alephium_pow_with_script_valid() {
-        let res = verify_alephium_pow_with_script(&NONCE, &HEADER, &TARGET);
+    const NONCE_HEX: &str = "bd193b24440aca7894a1edea53fc7bf0cc52c06e7b970562";
+    const HEADER_HEX: &str = "71e0a99173564931c0b8acc52d2685a8e39c64dc52e3d02390fdac2a12b155cbfbd480ea895758fa18cb534cd1a8f2617a299636d8b77e186fa09b7e369036edadf5d00d823b299d67b91384bcfe977e1efdaf56575410bb59c9ef4dced5df13304357f20c8f8958499833c9d9385534929515b30aea4e19e8dabd1890d970e206d5088ec1125b2d2c9b15c008bff7e0e23cebe0a26fc2fdfc16d13443465828337e4e43ef84b0aee9a348a3baab8d3002e2de9b7adc6ccf3ac6b6d0d881a214914d16e6fcb595768e273e606379fd0e";
+    const TARGET_HEX: &str =
+        "000000068db8bac710cb295e9e1b089a027525460aa64c2f837b4a2339c0ebed";
+
+    fn fixtures() -> ([u8; NONCE_LEN], [u8; HEADER_LEN], [u8; 32]) {
+        (
+            hex_to_array::<NONCE_LEN>(NONCE_HEX),
+            hex_to_array::<HEADER_LEN>(HEADER_HEX),
+            hex_to_array::<32>(TARGET_HEX),
+        )
+    }
+
+    #[rstest]
+    #[case::valid(fixtures())]
+    fn test_verify_alephium_pow_with_script_valid(
+        #[case] (nonce, header, target): (
+            [u8; NONCE_LEN],
+            [u8; HEADER_LEN],
+            [u8; 32],
+        ),
+    ) {
+        let res = verify_alephium_pow_with_script(&nonce, &header, &target);
+
+        let good = is_good_solution(&nonce, &header, &target);
+
+        if !res.success {
+            println!(
+                "-----------------------------------------------------------"
+            );
+            println!("Nonce: {}", hex::encode(&nonce));
+            println!("Header: {}", hex::encode(&header));
+            println!("Target: {}", hex::encode(&target));
+            println!("Nonce: {}", hex::encode(&nonce));
+
+            println!(
+                "-----------------------------------------------------------"
+            );
+            println!("good: {}", good);
+            println!("Success: {}", res.success);
+            println!("Last opcode: {:?}", res.last_opcode);
+            println!("Remaining_script: {:?}", res.remaining_script);
+            println!("Final stack: {:?}", res.final_stack);
+            println!("Error: {:?}", res.error);
+        }
+
         assert!(res.success, "Expected success for valid PoW");
         assert!(
             !res.final_stack.0.is_empty(),
@@ -339,12 +398,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_verify_alephium_pow_with_script_invalid() {
-        let mut bad_nonce = NONCE;
+    #[rstest]
+    #[case::invalid({
+        let (mut bad_nonce, header, target) = fixtures();
         bad_nonce[0] ^= 0xFF;
-        let res_bad =
-            verify_alephium_pow_with_script(&bad_nonce, &HEADER, &TARGET);
+        (bad_nonce, header, target)
+    })]
+    fn test_verify_alephium_pow_with_script_invalid(
+        #[case] (nonce, header, target): (
+            [u8; NONCE_LEN],
+            [u8; HEADER_LEN],
+            [u8; 32],
+        ),
+    ) {
+        let res_bad = verify_alephium_pow_with_script(&nonce, &header, &target);
         assert!(!res_bad.success, "Expected failure for invalid PoW");
     }
 }

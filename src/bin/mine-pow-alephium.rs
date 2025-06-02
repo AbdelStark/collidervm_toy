@@ -2,15 +2,14 @@
 // Rust port of mock_pool.py: Alephium mock pool for gpu-miner connectivity tests
 // Usage: cargo run --bin mock_pool -- --host 0.0.0.0 --port 10973 --difficulty 1
 
+use bitcoin::ScriptBuf;
 use bitcoin::opcodes::OP_TRUE;
 use bitcoin::script::Builder;
-use bitcoin::ScriptBuf;
 
 use bitcoin_script_stack::optimizer;
 use bitvm::hash::blake3::blake3_push_message_script_with_limb;
 use bitvm::{
-    ExecuteInfo,
-    execute_script_buf,
+    ExecuteInfo, execute_script_buf,
     hash::blake3::blake3_compute_script_with_limb,
 };
 
@@ -231,7 +230,8 @@ fn build_check_alephium_block_hash(
     //     .fold(Builder::new(), |b, limb| b.push_int(limb))
     //     .into_script();
 
-    let message_limbs = blake3_push_message_script_with_limb(block, limb_len).compile();
+    let message_limbs =
+        blake3_push_message_script_with_limb(block, limb_len).compile();
 
     let h1 = optimizer::optimize(
         blake3_compute_script_with_limb(BLAKE3_BUF_LEN, limb_len).compile(),
@@ -284,10 +284,7 @@ pub fn verify_alephium_block_hash_with_script(
 
     let res = execute_script_buf(script);
 
-    println!(
-        "Script executed with success: {}",
-        res.success
-    );
+    println!("Script executed with success: {}", res.success);
     println!("stack: {:?}", res.final_stack);
 
     return res.success;

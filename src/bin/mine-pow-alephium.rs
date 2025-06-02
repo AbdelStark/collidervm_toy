@@ -16,8 +16,8 @@ use bitvm::{
 use clap::Parser;
 
 use collidervm_toy::core::{
-    blake3_message_to_limbs, build_drop, build_prefix_equalverify,
-    build_script_hash_to_limbs, combine_scripts,
+    build_drop, build_prefix_equalverify, build_script_hash_to_limbs,
+    combine_scripts,
 };
 
 use num_bigint::BigUint;
@@ -191,7 +191,7 @@ fn reconstruct_hash_from_stack(result: &ExecuteInfo) -> BigUint {
         .iter_str()
         .map(|v| {
             if v.len() > 4 {
-                panic!("Stack element too large to fit in u32: {:?}", v);
+                panic!("Stack element too large to fit in u32: {v:?}");
             }
             let mut arr = [0u8; 4];
             arr[4 - v.len()..].copy_from_slice(&v);
@@ -210,7 +210,7 @@ fn reconstruct_hash_from_stack(result: &ExecuteInfo) -> BigUint {
             .copied()
             .expect("Not enough stack elements for lo nibble");
         if hi > 0xF || lo > 0xF {
-            panic!("Nibble value out of range: hi={}, lo={}", hi, lo);
+            panic!("Nibble value out of range: hi={hi}, lo={lo}");
         }
         let byte = ((hi as u8) << 4) | (lo as u8);
         hash.push(byte);
@@ -276,8 +276,8 @@ pub fn verify_alephium_block_hash_with_script(
     assert_eq!(block_hash.len(), 32, "block_hash must be 32 bytes");
 
     let mut message = Vec::default();
-    message.extend_from_slice(&nonce);
-    message.extend_from_slice(&header);
+    message.extend_from_slice(nonce);
+    message.extend_from_slice(header);
     message.resize(BLAKE3_BUF_LEN, 0);
 
     let script = build_check_alephium_block_hash(&message, block_hash);
@@ -287,7 +287,7 @@ pub fn verify_alephium_block_hash_with_script(
     println!("Script executed with success: {}", res.success);
     println!("stack: {:?}", res.final_stack);
 
-    return res.success;
+    res.success
 }
 
 fn decode_submit_block(frame: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
@@ -381,13 +381,13 @@ fn main() -> io::Result<()> {
                 let diff = args.difficulty;
                 thread::spawn(move || {
                     if let Err(e) = handle_miner(stream, diff) {
-                        eprintln!("[!] Error handling miner: {}", e);
+                        eprintln!("[!] Error handling miner: {e}");
                     }
                     std::process::exit(0);
                 });
             }
             Err(e) => {
-                eprintln!("Connection failed: {}", e);
+                eprintln!("Connection failed: {e}");
             }
         }
     }

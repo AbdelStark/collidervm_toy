@@ -44,10 +44,6 @@ struct Args {
     difficulty: u64,
 }
 
-fn u32be(i: u32) -> [u8; 4] {
-    i.to_be_bytes()
-}
-
 fn blob(data: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(4 + data.len());
     v.extend(&(data.len() as u32).to_be_bytes());
@@ -64,23 +60,23 @@ fn build_job(
     height: u32,
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend(&u32be(from_group));
-    v.extend(&u32be(to_group));
+    v.extend(&from_group.to_be_bytes());
+    v.extend(&to_group.to_be_bytes());
     v.extend(blob(header_blob));
     v.extend(blob(txs_blob));
     v.extend(blob(target_blob));
-    v.extend(&u32be(height));
+    v.extend(&height.to_be_bytes());
     v
 }
 
 fn build_jobs_message(jobs: &[Vec<u8>]) -> Vec<u8> {
     let mut body = vec![PROTO_VERSION, MSG_JOBS];
-    body.extend(&u32be(jobs.len() as u32));
+    body.extend(&jobs.len().to_be_bytes());
     for job in jobs {
         body.extend(job);
     }
     let mut msg = Vec::new();
-    msg.extend(&u32be(body.len() as u32));
+    msg.extend(&body.len().to_be_bytes());
     msg.extend(body);
     msg
 }

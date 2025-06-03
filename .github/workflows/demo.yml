@@ -49,7 +49,7 @@ jobs:
         run: docker exec bitcoind-regtest bitcoin-cli -regtest --rpcuser=user --rpcpassword=PaSsWoRd -generate 101
 
       - name: Run
-        run: ./target/release/collidervm_toy
+        run: ./target/release/demo
 
       - name: Stop Bitcoin Regtest
         working-directory: scripts/demo

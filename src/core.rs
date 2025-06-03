@@ -137,7 +137,7 @@ pub fn flow_id_to_prefix_bytes(flow_id: u32, b_bits: usize) -> Vec<u8> {
 }
 
 /// Helper: combine scripts (by just concatenating the raw bytes).
-fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
+pub fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
     let mut combined = Vec::new();
     for frag in fragments {
         combined.extend(frag.to_bytes());
@@ -153,7 +153,7 @@ fn combine_scripts(fragments: &[ScriptBuf]) -> ScriptBuf {
 /// We need to take care of the fact that the prefix is now in nibbles.
 /// Also the ordering of elements on the stack.
 /// We need to push the prefix in reverse order to the stack.
-fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
+pub fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
     let mut b = Builder::new();
 
     // Check each nibble individually, pushing in reverse order to match stack evaluation
@@ -163,6 +163,14 @@ fn build_prefix_equalverify(prefix_data: &[u8]) -> ScriptBuf {
         b = b.push_opcode(opcodes::all::OP_EQUALVERIFY);
     }
 
+    b.into_script()
+}
+
+pub fn build_drop(items: usize) -> ScriptBuf {
+    let mut b = Builder::new();
+    for _ in 0..items {
+        b = b.push_opcode(opcodes::all::OP_DROP);
+    }
     b.into_script()
 }
 
@@ -229,14 +237,9 @@ pub fn build_script_f1_blake3_locked(
     // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
     let needed_nibbles = prefix_len;
     let blake3_script_hash_len_nibbles = 64;
-    let to_drop = blake3_script_hash_len_nibbles - needed_nibbles;
-    let drop_script = {
-        let mut b = Builder::new();
-        for _ in 0..to_drop {
-            b = b.push_opcode(opcodes::all::OP_DROP);
-        }
-        b.into_script()
-    };
+
+    let drop_script =
+        build_drop(blake3_script_hash_len_nibbles - needed_nibbles);
 
     // 6) compare prefix => OP_EQUALVERIFY
     let prefix_cmp_script = build_prefix_equalverify(flow_id_prefix);
@@ -302,14 +305,9 @@ fn build_script_f2_blake3_locked_with_mode(
     // Needed nibbles: prefix_len (because now represented as nibbles) or B / 4
     let needed_nibbles = prefix_len;
     let blake3_script_hash_len_nibbles = 64;
-    let to_drop = blake3_script_hash_len_nibbles - needed_nibbles;
-    let drop_script = {
-        let mut b = Builder::new();
-        for _ in 0..to_drop {
-            b = b.push_opcode(opcodes::all::OP_DROP);
-        }
-        b.into_script()
-    };
+
+    let drop_script =
+        build_drop(blake3_script_hash_len_nibbles - needed_nibbles);
 
     // 6) compare prefix => OP_EQUALVERIFY
     let prefix_cmp_script = build_prefix_equalverify(flow_id_prefix);
@@ -373,7 +371,7 @@ pub fn benchmark_hash_rate(duration_secs: u64) -> u64 {
     rate as u64
 }
 
-fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
+pub fn chunk_message(message_bytes: &[u8]) -> Vec<[u8; 64]> {
     let len = message_bytes.len();
     let needed_padding_bytes = if len % 64 == 0 { 0 } else { 64 - (len % 64) };
 
@@ -441,6 +439,35 @@ pub fn blake3_message_to_limbs(message_bytes: &[u8], limb_len: u8) -> Vec<u32> {
     }
 
     limbs
+}
+
+pub fn build_script_hash_to_limbs() -> ScriptBuf {
+    let mut builder = Builder::new();
+
+    for _ in 0..56 {
+        builder = builder.push_opcode(opcodes::all::OP_TOALTSTACK);
+    }
+    for i in 0..8 {
+        for j in (0..8).step_by(2) {
+            builder = builder
+                .push_int(j)
+                .push_opcode(opcodes::all::OP_ROLL)
+                .push_int(j + 1)
+                .push_opcode(opcodes::all::OP_ROLL)
+                .push_opcode(opcodes::all::OP_SWAP);
+        }
+        if i != 7 {
+            for _ in 0..8 {
+                builder = builder.push_opcode(opcodes::all::OP_FROMALTSTACK);
+            }
+        }
+    }
+
+    for _ in 0..64 {
+        builder = builder.push_int(0);
+    }
+
+    builder.into_script()
 }
 
 #[cfg(test)]

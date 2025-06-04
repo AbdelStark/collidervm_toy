@@ -1,4 +1,4 @@
-use crate::utils::{encode_scriptnum, NonceSearchProgress};
+use crate::utils::{NonceSearchProgress, encode_scriptnum};
 use bitcoin::{
     Amount, PublicKey, XOnlyPublicKey,
     blockdata::script::{Builder, ScriptBuf},
@@ -182,34 +182,38 @@ pub fn build_drop(items: usize) -> ScriptBuf {
 // Only supports power-of-2 limb lengths for Bitcoin Script efficiency.
 fn build_script_reconstruct_x(limb_len: u8) -> ScriptBuf {
     // Validate that limb_len_bits is a power of 2
-    assert!(limb_len > 0 && (limb_len & (limb_len - 1)) == 0, 
-            "limb_len_bits must be a power of 2");
-    
+    assert!(
+        limb_len > 0 && (limb_len & (limb_len - 1)) == 0,
+        "limb_len_bits must be a power of 2"
+    );
+
     let limbs_needed = (32 + limb_len - 1) / limb_len; // Ceiling division
-    
+
     println!("limb_len: {limb_len}, limbs_needed: {limbs_needed}");
 
     let mut b = Builder::new().push_int(0); // acc = 0
-    
+
     for i in 0..limbs_needed {
         for _ in 0..limb_len {
-            b = b.push_opcode(opcodes::all::OP_DUP)
-                 .push_opcode(opcodes::all::OP_ADD);
+            b = b
+                .push_opcode(opcodes::all::OP_DUP)
+                .push_opcode(opcodes::all::OP_ADD);
         }
-        
+
         // Pick the i-th limb from bottom of stack and add to accumulator
-        b = b.push_opcode(opcodes::all::OP_DEPTH)
-             .push_opcode(opcodes::all::OP_1SUB)      // depth - 1 (bottom index)
-             .push_int(i as i64)                      // limb index
-             .push_opcode(opcodes::all::OP_SUB)       // (depth-1) - i
-             .push_opcode(opcodes::all::OP_PICK)      // copy limb to top
-             .push_opcode(opcodes::all::OP_ADD);      // acc += limb
+        b = b
+            .push_opcode(opcodes::all::OP_DEPTH)
+            .push_opcode(opcodes::all::OP_1SUB) // depth - 1 (bottom index)
+            .push_int(i as i64) // limb index
+            .push_opcode(opcodes::all::OP_SUB) // (depth-1) - i
+            .push_opcode(opcodes::all::OP_PICK) // copy limb to top
+            .push_opcode(opcodes::all::OP_ADD); // acc += limb
     }
-    
+
     b.into_script()
 }
 
-// limb length for blake3 in bits, 
+// limb length for blake3 in bits,
 // blake3 accepts any limb length [4, 32) but due to the way how build_script_reconstruct_x
 // it must be a power of 2 between 1 and 16
 // Valid values: 1, 2, 4, 8, 16
@@ -333,9 +337,7 @@ pub fn build_script_f2_blake3_locked(
     ])
 }
 
-
 pub fn message_to_witness_limbs(x: u32, nonce: u64) -> Vec<Vec<u8>> {
-    
     let message = [
         x.to_le_bytes(),
         nonce.to_le_bytes()[0..4].try_into().unwrap(),
@@ -585,7 +587,7 @@ mod tests {
         let push_script = ScriptBuf::from_bytes(msg_push_script.to_bytes());
 
         let total_msg_len = 12;
-        
+
         let compute_compiled =
             blake3_compute_script_with_limb(total_msg_len, limb_len).compile();
         let compute_optimized = optimizer::optimize(compute_compiled);

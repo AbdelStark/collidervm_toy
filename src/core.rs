@@ -187,7 +187,7 @@ fn build_script_reconstruct_x(limb_len: u8) -> ScriptBuf {
         "limb_len_bits must be a power of 2"
     );
 
-    let limbs_needed = 32u32.div_ceil(limb_len as u32) as usize;
+    let limbs_needed = 32u8.div_ceil(limb_len);
 
     let mut b = Builder::new().push_int(0); // acc = 0
 

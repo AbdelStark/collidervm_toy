@@ -7,7 +7,6 @@ use bitcoin::opcodes::OP_TRUE;
 use bitcoin::script::Builder;
 
 use bitcoin_script_stack::optimizer;
-use bitvm::hash::blake3::blake3_push_message_script_with_limb;
 use bitvm::{
     ExecuteInfo, execute_script_buf,
     hash::blake3::blake3_compute_script_with_limb,
@@ -16,8 +15,8 @@ use bitvm::{
 use clap::Parser;
 
 use collidervm_toy::core::{
-    build_drop, build_prefix_equalverify, build_script_hash_to_limbs,
-    combine_scripts,
+    blake3_message_to_limbs, build_drop, build_prefix_equalverify,
+    build_script_hash_to_limbs, combine_scripts,
 };
 
 use num_bigint::BigUint;
@@ -220,14 +219,11 @@ fn build_check_alephium_block_hash(
 ) -> ScriptBuf {
     let limb_len = 16;
 
-    // let message_limbs = blake3_message_to_limbs(&block, limb_len)
-    //     .iter()
-    //     .map(|&limb| limb as i64)
-    //     .fold(Builder::new(), |b, limb| b.push_int(limb))
-    //     .into_script();
-
-    let message_limbs =
-        blake3_push_message_script_with_limb(block, limb_len).compile();
+    let message_limbs = blake3_message_to_limbs(&block, limb_len)
+        .iter()
+        .map(|&limb| limb as i64)
+        .fold(Builder::new(), |b, limb| b.push_int(limb))
+        .into_script();
 
     let h1 = optimizer::optimize(
         blake3_compute_script_with_limb(BLAKE3_BUF_LEN, limb_len).compile(),
@@ -280,8 +276,8 @@ pub fn verify_alephium_block_hash_with_script(
 
     let res = execute_script_buf(script);
 
-    println!("Script executed with success: {}", res.success);
-    println!("stack: {:?}", res.final_stack);
+    // println!("Script executed with success: {}", res.success);
+    // println!("stack: {:?}", res.final_stack);
 
     res.success
 }

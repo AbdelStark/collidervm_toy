@@ -187,9 +187,7 @@ fn build_script_reconstruct_x(limb_len: u8) -> ScriptBuf {
         "limb_len_bits must be a power of 2"
     );
 
-    let limbs_needed = (32 + limb_len - 1) / limb_len; // Ceiling division
-
-    println!("limb_len: {limb_len}, limbs_needed: {limbs_needed}");
+    let limbs_needed = 32u32.div_ceil(limb_len as u32) as usize;
 
     let mut b = Builder::new().push_int(0); // acc = 0
 
@@ -216,8 +214,8 @@ fn build_script_reconstruct_x(limb_len: u8) -> ScriptBuf {
 // limb length for blake3 in bits,
 // blake3 accepts any limb length [4, 32) but due to the way how build_script_reconstruct_x
 // it must be a power of 2 between 1 and 16
-// Valid values: 1, 2, 4, 8, 16
-const LIMB_LEN: u8 = 16;
+// Valid values: 4, 8, 16
+const LIMB_LEN: u8 = 8;
 
 /// Build an F1 script with onchain BLAKE3, checking x>F1_THRESHOLD and the top (b_bits/8) bytes match flow_id_prefix.
 pub fn build_script_f1_blake3_locked(

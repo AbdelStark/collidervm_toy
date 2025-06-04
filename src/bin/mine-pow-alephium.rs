@@ -219,7 +219,7 @@ fn build_check_alephium_block_hash(
 ) -> ScriptBuf {
     let limb_len = 16;
 
-    let message_limbs = blake3_message_to_limbs(&block, limb_len)
+    let message_limbs = blake3_message_to_limbs(block, limb_len)
         .iter()
         .map(|&limb| limb as i64)
         .fold(Builder::new(), |b, limb| b.push_int(limb))

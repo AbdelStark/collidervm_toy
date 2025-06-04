@@ -215,7 +215,7 @@ fn build_script_reconstruct_x(limb_len: u8) -> ScriptBuf {
 // blake3 accepts any limb length [4, 32) but due to the way how build_script_reconstruct_x
 // it must be a power of 2 between 1 and 16
 // Valid values: 4, 8, 16
-const LIMB_LEN: u8 = 8;
+const LIMB_LEN: u8 = 4;
 
 /// Build an F1 script with onchain BLAKE3, checking x>F1_THRESHOLD and the top (b_bits/8) bytes match flow_id_prefix.
 pub fn build_script_f1_blake3_locked(

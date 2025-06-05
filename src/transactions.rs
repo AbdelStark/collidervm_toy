@@ -1,8 +1,8 @@
 use crate::core::{
-    blake3_message_to_limbs, build_script_f1_blake3_locked,
-    build_script_f2_blake3_locked,
+    build_script_f1_blake3_locked, build_script_f2_blake3_locked,
+    message_to_witness_limbs,
 };
-use crate::utils::{encode_scriptnum, estimate_fee_vbytes};
+use crate::utils::estimate_fee_vbytes;
 use anyhow;
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
@@ -79,7 +79,7 @@ pub fn create_f1_tx(
     };
 
     let xonly_pk = XOnlyPublicKey::from(*pk_signer);
-    let funding_script = get_funding_script(&x_only_pk);
+    let funding_script = get_funding_script(&xonly_pk);
 
     let leaf_hash =
         TapLeafHash::from_script(&funding_script, LeafVersion::TapScript);
@@ -220,17 +220,9 @@ pub fn finalize_lock_tx(
         .control_block(&(lock.clone(), LeafVersion::TapScript))
         .unwrap();
 
-    // Encode input_value || nonce
-    let message = [
-        x.to_le_bytes(),
-        nonce.to_le_bytes()[0..4].try_into()?,
-        nonce.to_le_bytes()[4..8].try_into()?,
-    ]
-    .concat();
-
     let mut witness = Witness::new();
-    for limb in blake3_message_to_limbs(&message, 4) {
-        witness.push(encode_scriptnum(limb.into()));
+    for limb in message_to_witness_limbs(*x, *nonce) {
+        witness.push(limb);
     }
 
     witness.push(sig.serialize());
@@ -539,7 +531,7 @@ mod tests {
         assert!(
             exec_info_spending.success,
             "Spending script dry run failed: {:?}",
-            exec_info_f2.last_opcode
+            exec_info_spending.last_opcode
         );
         Ok(())
     }
